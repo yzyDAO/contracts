@@ -18,7 +18,13 @@ contract YZYVault is Context, Ownable {
     address private _yfiPoolAddress;
     address private _wbtcPoolAddress;
     address private _wethPoolAddress;
+    uint16 private _taxFee;
+    uint16 private _treasuryFee;
     uint16 private _devFee;
+    uint16 private _buyingTokenFee;
+    uint16 private _buyingYFITokenFee;
+    uint16 private _buyingWBTCTokenFee;
+    uint16 private _buyingWETHTokenFee;
 
     // Period of reward distribution to stakers
     // It is `1 days` by default and could be changed
@@ -62,7 +68,19 @@ contract YZYVault is Context, Ownable {
         address indexed governance,
         address indexed yzyAddress
     );
-    event changedDevFeeReciever(
+    event ChangedYfiPoolAddress(
+        address indexed governance,
+        address indexed yfiAddress
+    );
+    event ChangedWbtcPoolAddress(
+        address indexed governance,
+        address indexed wbtcAddress
+    );
+    event ChangedWethPoolAddress(
+        address indexed governance,
+        address indexed wethAddress
+    );
+    event ChangedDevFeeReciever(
         address indexed governance,
         address indexed oldAddress,
         address indexed newAddress
@@ -73,6 +91,13 @@ contract YZYVault is Context, Ownable {
         uint256 amount
     );
     event WithdrewReward(address indexed staker, uint256 amount);
+    event ChangeTaxFee(address indexed governance, uint16 value);
+    event ChangeTreasuryFee(address indexed governance, uint16 value);
+    event ChangeDevFee(address indexed governance, uint16 value);
+    event ChangeBuyingTokenFee(address indexed governance, uint16 value);
+    event ChangeBuyingYFITokenFee(address indexed governance, uint16 value);
+    event ChangeBuyingWBTCTokenFee(address indexed governance, uint16 value);
+    event ChangeBuyingWETHTokenFee(address indexed governance, uint16 value);
 
     // Modifier
 
@@ -97,14 +122,85 @@ contract YZYVault is Context, Ownable {
         _;
     }
 
-    constructor() {
-        _rewardPeriod = 1 days;
+    constructor(
+        address yzyContractAddress,
+        address uniswapV2PairAddress,
+        address yfiPoolContractAddress,
+        address wbtcPoolContractAddress,
+        address wethPoolContractAddress
+    ) {
+        _yzyAddress = yzyContractAddress;
+        _uniswapV2Pair = uniswapV2PairAddress;
+        _yfiPoolAddress = yfiPoolContractAddress;
+        _wbtcPoolAddress = wbtcPoolContractAddress;
+        _wethPoolAddress = wethPoolContractAddress;
+
+        _rewardPeriod = 14 days;
         _contractStartTime = block.timestamp;
         _lastRewardedTime = _contractStartTime;
-        _devFee = 400;
+
+        _taxFee = 200; // 2% of transaction to taxFee
+        _treasuryFee = 7600; // 76% of taxFee to treasuryFee
+        _devFee = 400; // 4% of taxFee to devFee
+        _buyingTokenFee = 2000; // 20% of taxFee to buyingTokenFee
+        _buyingYFITokenFee = 5000; // 50% of buyingTokenFee to buy YFI token
+        _buyingWBTCTokenFee = 3000; // 30% of buyingTokenFee to buy WBTC token
+        _buyingWETHTokenFee = 2000; // 20% of buyingTokenFee to buy WETH token
+
         _maxLockPeriod = 365 days; // around 1 year
         _minLockPeriod = 90 days; // around 3 months
         _enabledLock = true;
+    }
+
+    /**
+     * @dev Return address of YZY-YFI Pool contract
+     */
+    function yfiPoolAddress() external view returns (address) {
+        return _yfiPoolAddress;
+    }
+
+    /**
+     * @dev Change YZY-YFI Pool contract contract address. Call by only Governance.
+     */
+    function changeYfiPoolAddress(address yfiAddress_) external onlyGovernance {
+        _yfiPoolAddress = yfiAddress_;
+        emit ChangedYfiPoolAddress(governance(), yfiAddress_);
+    }
+
+    /**
+     * @dev Return address of YZY-WBTC Pool contract
+     */
+    function wbtcPoolAddress() external view returns (address) {
+        return _wbtcPoolAddress;
+    }
+
+    /**
+     * @dev Change YZY-WBTC Pool contract contract address. Call by only Governance.
+     */
+    function changeWbtcPoolAddress(address wbtcAddress_)
+        external
+        onlyGovernance
+    {
+        _wbtcPoolAddress = wbtcAddress_;
+        emit ChangedWbtcPoolAddress(governance(), wbtcAddress_);
+    }
+
+    /**
+     * @dev Return address of YZY-WETH Pool contract
+     */
+    function wethPoolAddress() external view returns (address) {
+        return _wethPoolAddress;
+    }
+
+    /**
+     * @dev Change YZY-WETH Pool contract contract address. Call by only Governance.
+     */
+    function changeWethPoolAddress(address wethAddress_)
+        external
+        onlyGovernance
+    {
+        _wethPoolAddress = wethAddress_;
+        emit ChangedWethPoolAddress(governance(), wethAddress_);
     }
 
     /**
@@ -236,7 +332,41 @@ contract YZYVault is Context, Ownable {
     function changeDevFeeReciever(address devAddress_) external onlyGovernance {
         address oldAddress = _devAddress;
         _devAddress = devAddress_;
-        emit changedDevFeeReciever(governance(), oldAddress, _devAddress);
+        emit ChangedDevFeeReciever(governance(), oldAddress, _devAddress);
+    }
+
+    /**
+     * @dev Return tax fee
+     */
+    function taxFee() external view returns (uint16) {
+        return _taxFee;
+    }
+
+    /**
+     * @dev Update the tax fee for this contract
+     * defaults at 2.00% of transaction
+     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
+     */
+    function changeTaxFee(uint16 taxFee_) external onlyGovernance {
+        _taxFee = taxFee_;
+        emit ChangeTaxFee(governance(), taxFee_);
+    }
+
+    /**
+     * @dev Return Treasury fee
+     */
+    function treasuryFee() external view returns (uint16) {
+        return _treasuryFee;
+    }
+
+    /**
+     * @dev Update the treasury fee for this contract
+     * defaults at 76.00% of taxFee
+     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
+     */
+    function changeTreasuryFee(uint16 treasuryFee_) external onlyGovernance {
+        _treasuryFee = treasuryFee_;
+        emit ChangeTreasuryFee(governance(), treasuryFee_);
     }
 
     /**
@@ -248,12 +378,92 @@ contract YZYVault is Context, Ownable {
 
     /**
      * @dev Update the dev fee for this contract
-     * defaults at 4.00%
+     * defaults at 4.00% of taxFee
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
      */
     function changeDevFee(uint16 devFee_) external onlyGovernance {
-        require(_devFee <= 1000, "Dev fee clamped at 10%");
         _devFee = devFee_;
+        emit ChangeDevFee(governance(), devFee_);
+    }
+
+    /**
+     * @dev Return BuyingToken fee
+     */
+    function buyingTokenFee() external view returns (uint16) {
+        return _buyingTokenFee;
+    }
+
+    /**
+     * @dev Update the buying token fee for this contract
+     * defaults at 20.00% of taxFee
+     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
+     */
+    function changeBuyingTokenFee(uint16 buyingTokenFee_)
+        external
+        onlyGovernance
+    {
+        _buyingTokenFee = buyingTokenFee_;
+        emit ChangeBuyingTokenFee(governance(), buyingTokenFee_);
+    }
+
+    /**
+     * @dev Return BuyingYFIToken fee
+     */
+    function buyingYFITokenFee() external view returns (uint16) {
+        return _buyingYFITokenFee;
+    }
+
+    /**
+     * @dev Update the buying YFI token fee for this contract
+     * defaults at 50.00% of buyingTokenFee
+     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
+     */
+    function changeBuyingYFITokenFee(uint16 buyingYFITokenFee_)
+        external
+        onlyGovernance
+    {
+        _buyingYFITokenFee = buyingYFITokenFee_;
+        emit ChangeBuyingYFITokenFee(governance(), buyingYFITokenFee_);
+    }
+
+    /**
+     * @dev Return BuyingWBTCToken fee
+     */
+    function buyingWBTCTokenFee() external view returns (uint16) {
+        return _buyingWBTCTokenFee;
+    }
+
+    /**
+     * @dev Update the buying WBTC token fee for this contract
+     * defaults at 30.00% of buyingTokenFee
+     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
+     */
+    function changeBuyingWBTCTokenFee(uint16 buyingWBTCTokenFee_)
+        external
+        onlyGovernance
+    {
+        _buyingWBTCTokenFee = buyingWBTCTokenFee_;
+        emit ChangeBuyingWBTCTokenFee(governance(), buyingWBTCTokenFee_);
+    }
+
+    /**
+     * @dev Return BuyingWETHToken fee
+     */
+    function buyingWETHTokenFee() external view returns (uint16) {
+        return _buyingWETHTokenFee;
+    }
+
+    /**
+     * @dev Update the buying WETH token fee for this contract
+     * defaults at 20.00% of buyingTokenFee
+     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
+     */
+    function changeBuyingWETHTokenFee(uint16 buyingWETHTokenFee_)
+        external
+        onlyGovernance
+    {
+        _buyingWETHTokenFee = buyingWETHTokenFee_;
+        emit ChangeBuyingWETHTokenFee(governance(), buyingWETHTokenFee_);
     }
 
     /**

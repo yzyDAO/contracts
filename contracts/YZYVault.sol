@@ -6,7 +6,9 @@ import "./SafeMath.sol";
 import "./Context.sol";
 import "./Ownable.sol";
 import "./IYZY.sol";
-import "./IUniV2Pair.sol";
+import "./IERC20.sol";
+import "./uniswapv2/interfaces/IUniswapV2Pair.sol";
+import "./uniswapv2/interfaces/IUniswapV2Router02.sol";
 
 contract YZYVault is Context, Ownable {
     using SafeMath for uint256;
@@ -15,10 +17,10 @@ contract YZYVault is Context, Ownable {
     address private _uniswapV2Pair;
     address private _yzyAddress;
     address private _devAddress;
-    address private _yfiPoolAddress;
-    address private _wbtcPoolAddress;
-    address private _wethPoolAddress;
-    uint16 private _taxFee;
+    address private _yfiTokenAddress;
+    address private _wbtcTokenAddress;
+    address private _wethTokenAddress;
+
     uint16 private _treasuryFee;
     uint16 private _devFee;
     uint16 private _buyingTokenFee;
@@ -26,27 +28,33 @@ contract YZYVault is Context, Ownable {
     uint16 private _buyingWBTCTokenFee;
     uint16 private _buyingWETHTokenFee;
 
+    IUniswapV2Router02 public immutable _uniswapV2Router;
+
     // Period of reward distribution to stakers
     // It is `1 days` by default and could be changed
     // later only by Governance
     uint256 private _rewardPeriod;
+    uint256 private _buyingTokenRewardPeriod;
     uint256 private _maxLockPeriod;
     uint256 private _minLockPeriod;
     bool private _enabledLock;
 
     // save the timestamp for every period's reward
     uint256 private _lastRewardedTime;
+    uint256 private _lastBuyingTokenRewardedTime;
     uint256 private _contractStartTime;
     uint256 private _totalStakedAmount;
     address[] private _stakerList;
 
     struct StakerInfo {
         uint256 totalStakedAmount;
-        uint256 lastWithrewTime;
+        uint256 lastWithdrawTime;
+        uint256 lastQuartelyWithdrawTime;
         uint256 lockedTo;
     }
 
     mapping(uint256 => uint256) private _eraRewards;
+    mapping(uint256 => uint256) private _eraTokenRewards;
     mapping(uint256 => uint256) private _eraTotalStakedAmounts;
     mapping(uint256 => mapping(address => uint256))
         private _userEraStakedAmounts;
@@ -60,7 +68,15 @@ contract YZYVault is Context, Ownable {
     event ChangedMaximumLockPeriod(address indexed governance, uint256 value);
     event ChangedMinimumLockPeriod(address indexed governance, uint256 value);
     event ChangedRewardPeriod(address indexed governance, uint256 value);
+    event ChangeBuyingTokenRewardPeriod(
+        address indexed governance,
+        uint256 value
+    );
     event ChangedUniswapV2Pair(
+        address indexed governance,
+        address indexed uniswapV2Pair
+    );
+    event ChangedUniswapV2Router(
         address indexed governance,
         address indexed uniswapV2Pair
     );
@@ -68,15 +84,15 @@ contract YZYVault is Context, Ownable {
         address indexed governance,
         address indexed yzyAddress
     );
-    event ChangedYfiPoolAddress(
+    event ChangedYfiTokenAddress(
         address indexed governance,
         address indexed yfiAddress
     );
-    event ChangedWbtcPoolAddress(
+    event ChangedWbtcTokenAddress(
         address indexed governance,
         address indexed wbtcAddress
     );
-    event ChangedWethPoolAddress(
+    event ChangedWethTokenAddress(
         address indexed governance,
         address indexed wethAddress
     );
@@ -85,19 +101,25 @@ contract YZYVault is Context, Ownable {
         address indexed oldAddress,
         address indexed newAddress
     );
-    event EmergencyWithdrewToken(
+    event EmergencyWithdrawToken(
         address indexed from,
         address indexed to,
         uint256 amount
     );
-    event WithdrewReward(address indexed staker, uint256 amount);
-    event ChangeTaxFee(address indexed governance, uint16 value);
+    event WithdrawTreasuryReward(address indexed staker, uint256 amount);
+    event WithdrawQuartelyReward(address indexed staker, uint256 amount);
     event ChangeTreasuryFee(address indexed governance, uint16 value);
     event ChangeDevFee(address indexed governance, uint16 value);
     event ChangeBuyingTokenFee(address indexed governance, uint16 value);
     event ChangeBuyingYFITokenFee(address indexed governance, uint16 value);
     event ChangeBuyingWBTCTokenFee(address indexed governance, uint16 value);
     event ChangeBuyingWETHTokenFee(address indexed governance, uint16 value);
+    event SwapAndLiquifyForYZY(
+        address msgSender,
+        uint256 totAmount,
+        uint256 ethAmount,
+        uint256 yzyAmount
+    );
 
     // Modifier
 
@@ -125,21 +147,24 @@ contract YZYVault is Context, Ownable {
     constructor(
         address yzyContractAddress,
         address uniswapV2PairAddress,
-        address yfiPoolContractAddress,
-        address wbtcPoolContractAddress,
-        address wethPoolContractAddress
+        address yfiTokenAddress,
+        address wbtcTokenAddress,
+        address wethTokenAddress,
+        address uniswapV2Router
     ) {
         _yzyAddress = yzyContractAddress;
         _uniswapV2Pair = uniswapV2PairAddress;
-        _yfiPoolAddress = yfiPoolContractAddress;
-        _wbtcPoolAddress = wbtcPoolContractAddress;
-        _wethPoolAddress = wethPoolContractAddress;
+        _yfiTokenAddress = yfiTokenAddress;
+        _wbtcTokenAddress = wbtcTokenAddress;
+        _wethTokenAddress = wethTokenAddress;
+        _uniswapV2Router = IUniswapV2Router02(uniswapV2Router);
 
         _rewardPeriod = 14 days;
+        _buyingTokenRewardPeriod = 90 days;
         _contractStartTime = block.timestamp;
         _lastRewardedTime = _contractStartTime;
+        _lastBuyingTokenRewardedTime = _contractStartTime;
 
-        _taxFee = 200; // 2% of transaction to taxFee
         _treasuryFee = 7600; // 76% of taxFee to treasuryFee
         _devFee = 400; // 4% of taxFee to devFee
         _buyingTokenFee = 2000; // 20% of taxFee to buyingTokenFee
@@ -153,54 +178,57 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return address of YZY-YFI Pool contract
+     * @dev Return address of YFI Token contract
      */
-    function yfiPoolAddress() external view returns (address) {
-        return _yfiPoolAddress;
+    function yfiTokenAddress() external view returns (address) {
+        return _yfiTokenAddress;
     }
 
     /**
-     * @dev Change YZY-YFI Pool contract contract address. Call by only Governance.
+     * @dev Change YFI Token contract address. Call by only Governance.
      */
-    function changeYfiPoolAddress(address yfiAddress_) external onlyGovernance {
-        _yfiPoolAddress = yfiAddress_;
-        emit ChangedYfiPoolAddress(governance(), yfiAddress_);
-    }
-
-    /**
-     * @dev Return address of YZY-WBTC Pool contract
-     */
-    function wbtcPoolAddress() external view returns (address) {
-        return _wbtcPoolAddress;
-    }
-
-    /**
-     * @dev Change YZY-WBTC Pool contract contract address. Call by only Governance.
-     */
-    function changeWbtcPoolAddress(address wbtcAddress_)
+    function changeYfiTokenAddress(address yfiAddress_)
         external
         onlyGovernance
     {
-        _wbtcPoolAddress = wbtcAddress_;
-        emit ChangedWbtcPoolAddress(governance(), wbtcAddress_);
+        _yfiTokenAddress = yfiAddress_;
+        emit ChangedYfiTokenAddress(governance(), yfiAddress_);
     }
 
     /**
-     * @dev Return address of YZY-WETH Pool contract
+     * @dev Return address of WBTC Token contract
      */
-    function wethPoolAddress() external view returns (address) {
-        return _wethPoolAddress;
+    function wbtcTokenAddress() external view returns (address) {
+        return _wbtcTokenAddress;
     }
 
     /**
-     * @dev Change YZY-WETH Pool contract contract address. Call by only Governance.
+     * @dev Change WBTC Token address. Call by only Governance.
      */
-    function changeWethPoolAddress(address wethAddress_)
+    function changeWbtcTokenAddress(address wbtcAddress_)
         external
         onlyGovernance
     {
-        _wethPoolAddress = wethAddress_;
-        emit ChangedWethPoolAddress(governance(), wethAddress_);
+        _wbtcTokenAddress = wbtcAddress_;
+        emit ChangedWbtcTokenAddress(governance(), wbtcAddress_);
+    }
+
+    /**
+     * @dev Return address of WETH Token contract
+     */
+    function wethTokenAddress() external view returns (address) {
+        return _wethTokenAddress;
+    }
+
+    /**
+     * @dev Change WETH Token address. Call by only Governance.
+     */
+    function changeWethTokenAddress(address wethAddress_)
+        external
+        onlyGovernance
+    {
+        _wethTokenAddress = wethAddress_;
+        emit ChangedWethTokenAddress(governance(), wethAddress_);
     }
 
     /**
@@ -285,6 +313,27 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
+     * @dev Return value of buying token reward period
+     */
+    function buyingTokenRewardPeriod() external view returns (uint256) {
+        return _buyingTokenRewardPeriod;
+    }
+
+    /**
+     * @dev Change value of reward period. Call by only Governance.
+     */
+    function changeBuyingTokenRewardPeriod(uint256 buyingTokenRewardPeriod_)
+        external
+        onlyGovernance
+    {
+        _buyingTokenRewardPeriod = buyingTokenRewardPeriod_;
+        emit ChangeBuyingTokenRewardPeriod(
+            governance(),
+            buyingTokenRewardPeriod_
+        );
+    }
+
+    /**
      * @dev Return address of YZY-ETH Uniswap V2 pair
      */
     function uniswapV2Pair() external view returns (address) {
@@ -300,6 +349,24 @@ contract YZYVault is Context, Ownable {
     {
         _uniswapV2Pair = uniswapV2Pair_;
         emit ChangedUniswapV2Pair(governance(), uniswapV2Pair_);
+    }
+
+    /**
+     * @dev Return address of Uniswap V2Router
+     */
+    function uniswapV2Router() external view returns (address) {
+        return address(_uniswapV2Router);
+    }
+
+    /**
+     * @dev Change address of Uniswap V2Router. Call by only Governance.
+     */
+    function changeUniswapV2Router(address uniswapV2Router_)
+        external
+        onlyGovernance
+    {
+        _uniswapV2Router = IUniswapV2Router02(uniswapV2Router_);
+        emit ChangedUniswapV2Router(governance(), address(uniswapV2Router_));
     }
 
     /**
@@ -336,23 +403,6 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return tax fee
-     */
-    function taxFee() external view returns (uint16) {
-        return _taxFee;
-    }
-
-    /**
-     * @dev Update the tax fee for this contract
-     * defaults at 2.00% of transaction
-     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
-     */
-    function changeTaxFee(uint16 taxFee_) external onlyGovernance {
-        _taxFee = taxFee_;
-        emit ChangeTaxFee(governance(), taxFee_);
-    }
-
-    /**
      * @dev Return Treasury fee
      */
     function treasuryFee() external view returns (uint16) {
@@ -361,7 +411,7 @@ contract YZYVault is Context, Ownable {
 
     /**
      * @dev Update the treasury fee for this contract
-     * defaults at 76.00% of taxFee
+     * defaults at 76.00% of taxFee, It can be set on only by YZY governance.
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
      */
     function changeTreasuryFee(uint16 treasuryFee_) external onlyGovernance {
@@ -378,7 +428,7 @@ contract YZYVault is Context, Ownable {
 
     /**
      * @dev Update the dev fee for this contract
-     * defaults at 4.00% of taxFee
+     * defaults at 4.00% of taxFee, It can be set on only by YZY governance.
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
      */
     function changeDevFee(uint16 devFee_) external onlyGovernance {
@@ -395,7 +445,7 @@ contract YZYVault is Context, Ownable {
 
     /**
      * @dev Update the buying token fee for this contract
-     * defaults at 20.00% of taxFee
+     * defaults at 20.00% of taxFee, It can be set on only by YZY governance.
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
      */
     function changeBuyingTokenFee(uint16 buyingTokenFee_)
@@ -479,22 +529,112 @@ contract YZYVault is Context, Ownable {
      */
     function addEraReward(uint256 amount_) external onlyYzy returns (bool) {
         uint256 blockTime = block.timestamp;
+        uint256 treasureDevFee = uint256(_treasuryFee).add(uint256(_devFee));
+        uint256 rewardAmount = amount_.mul(treasureDevFee).div(10000);
+        uint256 buyingTokenRewardAmount = amount_.sub(rewardAmount);
 
+        // Update Era Reward Amount
         if (blockTime.sub(_lastRewardedTime) >= _rewardPeriod) {
             uint256 currentTime = _lastRewardedTime.add(_rewardPeriod);
-            _eraRewards[currentTime] = _eraRewards[currentTime].add(amount_);
+            _eraRewards[currentTime] = _eraRewards[currentTime].add(
+                rewardAmount
+            );
             _lastRewardedTime = currentTime;
         } else {
             _eraRewards[_lastRewardedTime] = _eraRewards[_lastRewardedTime].add(
-                amount_
+                rewardAmount
             );
+        }
+
+        // Update Era Buying Token Reward Amount
+        if (
+            blockTime.sub(_lastBuyingTokenRewardedTime) >=
+            _buyingTokenRewardPeriod
+        ) {
+            uint256 currentTime =
+                _lastBuyingTokenRewardedTime.add(_buyingTokenRewardPeriod);
+            _eraTokenRewards[currentTime] = _eraTokenRewards[currentTime].add(
+                buyingTokenRewardAmount
+            );
+            _lastBuyingTokenRewardedTime = currentTime;
+        } else {
+            _eraTokenRewards[_lastBuyingTokenRewardedTime] = _eraTokenRewards[
+                _lastBuyingTokenRewardedTime
+            ]
+                .add(buyingTokenRewardAmount);
         }
 
         return true;
     }
 
+    function swapETHForTokens(uint256 ethAmount) private {
+        // generate the uniswap pair path of weth -> yzy
+        address[] memory path = new address[](2);
+        path[0] = _uniswapV2Router.WETH();
+        path[1] = _yzyAddress;
+
+        // make the swap
+        _uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{
+            value: ethAmount
+        }(0, path, address(this), block.timestamp);
+    }
+
+    function addLiquidityForEth(uint256 tokenAmount, uint256 ethAmount)
+        private
+    {
+        // add the liquidity
+        _uniswapV2Router.addLiquidityETH{value: ethAmount}(
+            _yzyAddress,
+            tokenAmount,
+            0, // slippage is unavoidable
+            0, // slippage is unavoidable
+            address(this),
+            block.timestamp
+        );
+    }
+
+    function swapAndLiquifyForYZY(uint256 amount) private {
+        uint256 halfForEth = amount.div(2);
+        uint256 otherHalfForYZY = amount.sub(halfForEth);
+
+        // capture the contract's current ETH balance.
+        // this is so that we can capture exactly the amount of ETH that the
+        // swap creates, and not make the liquidity event include any ETH that
+        // has been manually sent to the contract
+        uint256 initialBalance = IYZY(_yzyAddress).balanceOf(address(this));
+
+        // swap ETH for tokens
+        swapETHForTokens(otherHalfForYZY);
+
+        // how much YZY did we just swap into?
+        uint256 newBalance =
+            IYZY(_yzyAddress).balanceOf(address(this)).sub(initialBalance);
+
+        // add liquidity to uniswap
+        addLiquidityForEth(newBalance, halfForEth);
+
+        emit SwapAndLiquifyForYZY(_msgSender(), amount, halfForEth, newBalance);
+    }
+
+    function swapTokensForTokens(address pairTokenAddress, uint256 tokenAmount)
+        private
+    {
+        address[] memory path = new address[](2);
+        path[0] = address(_yzyAddress);
+        path[1] = pairTokenAddress;
+
+        // make the swap
+        _uniswapV2Router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0, // accept any amount of pair token
+            path,
+            _msgSender(),
+            block.timestamp
+        );
+    }
+
     /**
-     * @dev Stake YZY-ETH LP tokens
+     * @dev Stake ETH to get YZY-ETH LP tokens
      */
     function stake(uint256 amount_, uint256 lockTime) external {
         require(!_isContract(_msgSender()), "Could not be a contract");
@@ -504,40 +644,45 @@ contract YZYVault is Context, Ownable {
             "Invalid lock time"
         );
 
-        // Transfer tokens from staker to the contract amount
-        require(
-            IUniV2Pair(_uniswapV2Pair).transferFrom(
-                _msgSender(),
-                address(this),
-                amount_
-            ),
-            "It has failed to transfer tokens from staker to contract."
-        );
+        // Check Initial Balance
+        uint256 initialBalance =
+            IERC20(_uniswapV2Pair).balanceOf(address(this));
+
+        // Call swap for YZY&ETH
+        swapAndLiquifyForYZY(amount_);
+        uint256 newBlance =
+            IERC20(_uniswapV2Pair).balanceOf(address(this)).sub(initialBalance);
 
         // Increase the total staked amount
-        _totalStakedAmount = _totalStakedAmount.add(amount_);
+        _totalStakedAmount = _totalStakedAmount.add(newBlance);
 
         // Increase era staked amount
         _eraTotalStakedAmounts[_lastRewardedTime] = _eraTotalStakedAmounts[
             _lastRewardedTime
         ]
-            .add(amount_);
+            .add(newBlance);
 
-        if (_stakers[_msgSender()].lastWithrewTime == 0) {
-            _stakers[_msgSender()].lastWithrewTime = _lastRewardedTime;
+        if (_stakers[_msgSender()].lastWithdrawTime == 0) {
+            _stakers[_msgSender()].lastWithdrawTime = _lastRewardedTime;
             _stakers[_msgSender()].lockedTo = lockTime.add(block.timestamp);
             _stakerList.push(_msgSender());
+        }
+
+        if (_stakers[_msgSender()].lastQuartelyWithdrawTime == 0) {
+            _stakers[_msgSender()].lastQuartelyWithdrawTime = _lastRewardedTime;
         }
 
         // Increase staked amount of the staker
         _userEraStakedAmounts[_lastRewardedTime][
             _msgSender()
-        ] = _userEraStakedAmounts[_lastRewardedTime][_msgSender()].add(amount_);
+        ] = _userEraStakedAmounts[_lastRewardedTime][_msgSender()].add(
+            newBlance
+        );
         _stakers[_msgSender()].totalStakedAmount = _stakers[_msgSender()]
             .totalStakedAmount
-            .add(amount_);
+            .add(newBlance);
 
-        emit Staked(_msgSender(), amount_);
+        emit Staked(_msgSender(), newBlance);
     }
 
     /**
@@ -548,7 +693,8 @@ contract YZYVault is Context, Ownable {
         uint256 amount = _stakers[_msgSender()].totalStakedAmount;
         require(amount > 0, "No running stake");
 
-        _withdrawReward();
+        _withdrawTreasuryReward();
+        _withdrawQuarterlyReward();
 
         // Decrease the total staked amount
         _totalStakedAmount = _totalStakedAmount.sub(amount);
@@ -556,17 +702,17 @@ contract YZYVault is Context, Ownable {
 
         // Decrease the staker's amount
         uint256 blockTime = block.timestamp;
-        uint256 lastWithrewTime = _stakers[_msgSender()].lastWithrewTime;
-        uint256 n = blockTime.sub(lastWithrewTime).div(_rewardPeriod);
+        uint256 lastWithdrawTime = _stakers[_msgSender()].lastWithdrawTime;
+        uint256 n = blockTime.sub(lastWithdrawTime).div(_rewardPeriod);
 
         for (uint256 i = 0; i < n; i++) {
-            uint256 rewardTime = lastWithrewTime.add(_rewardPeriod.mul(i));
+            uint256 rewardTime = lastWithdrawTime.add(_rewardPeriod.mul(i));
             if (_userEraStakedAmounts[rewardTime][_msgSender()] != 0) {
                 _userEraStakedAmounts[rewardTime][_msgSender()] = 0;
             }
         }
         // Initialize started time of user
-        _stakers[_msgSender()].lastWithrewTime = 0;
+        _stakers[_msgSender()].lastWithdrawTime = 0;
 
         for (uint256 i = 0; i < _stakerList.length; i++) {
             if (_stakerList[i] == _msgSender()) {
@@ -578,7 +724,7 @@ contract YZYVault is Context, Ownable {
 
         // Transfer LP tokens from contract to staker
         require(
-            IUniV2Pair(_uniswapV2Pair).transfer(_msgSender(), amount),
+            IUniswapV2Pair(_uniswapV2Pair).transfer(_msgSender(), amount),
             "It has failed to transfer tokens from contract to staker."
         );
 
@@ -586,9 +732,9 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev API to get staker's reward
+     * @dev API to get staker's treasury reward
      */
-    function getReward(address account_)
+    function getTreasuryReward(address account_)
         public
         view
         returns (uint256, uint256)
@@ -597,18 +743,18 @@ contract YZYVault is Context, Ownable {
 
         uint256 reward = 0;
         uint256 blockTime = block.timestamp;
-        uint256 lastWithrewTime = _stakers[account_].lastWithrewTime;
+        uint256 lastWithdrawTime = _stakers[account_].lastWithdrawTime;
 
-        if (lastWithrewTime > 0) {
-            uint256 n = blockTime.sub(lastWithrewTime).div(_rewardPeriod);
+        if (lastWithdrawTime > 0) {
+            uint256 n = blockTime.sub(lastWithdrawTime).div(_rewardPeriod);
 
             for (uint256 i = 1; i <= n; i++) {
-                lastWithrewTime = lastWithrewTime.add(_rewardPeriod.mul(i));
-                uint256 eraRewards = _eraRewards[lastWithrewTime];
+                lastWithdrawTime = lastWithdrawTime.add(_rewardPeriod.mul(i));
+                uint256 eraRewards = _eraRewards[lastWithdrawTime];
                 uint256 eraTotalStakedAmounts =
-                    _eraTotalStakedAmounts[lastWithrewTime];
+                    _eraTotalStakedAmounts[lastWithdrawTime];
                 uint256 stakedAmount =
-                    _userEraStakedAmounts[lastWithrewTime][account_];
+                    _userEraStakedAmounts[lastWithdrawTime][account_];
                 reward = stakedAmount
                     .mul(eraRewards)
                     .div(eraTotalStakedAmounts)
@@ -616,14 +762,63 @@ contract YZYVault is Context, Ownable {
             }
         }
 
-        return (reward, lastWithrewTime);
+        return (reward, lastWithdrawTime);
     }
 
     /**
-     * @dev API to withdraw rewards to staker's wallet
+     * @dev API to get staker's other token's reward
      */
-    function withdrawReward() external returns (bool) {
-        _withdrawReward();
+    function getQuarterlyReward(address account_)
+        public
+        view
+        returns (uint256, uint256)
+    {
+        require(!_isContract(account_), "Could not be a contract");
+
+        uint256 quarterlyReward = 0;
+        uint256 blockTime = block.timestamp;
+        uint256 lastQuartelyWithdrawTime =
+            _stakers[account_].lastQuartelyWithdrawTime;
+
+        if (lastQuartelyWithdrawTime > 0) {
+            uint256 n =
+                blockTime.sub(lastQuartelyWithdrawTime).div(
+                    _buyingTokenRewardPeriod
+                );
+
+            for (uint256 i = 1; i <= n; i++) {
+                lastQuartelyWithdrawTime = lastQuartelyWithdrawTime.add(
+                    _buyingTokenRewardPeriod.mul(i)
+                );
+                uint256 eraTokenRewards =
+                    _eraTokenRewards[lastQuartelyWithdrawTime];
+                uint256 eraTotalStakedAmounts =
+                    _eraTotalStakedAmounts[lastQuartelyWithdrawTime];
+                uint256 stakedAmount =
+                    _userEraStakedAmounts[lastQuartelyWithdrawTime][account_];
+                quarterlyReward = stakedAmount
+                    .mul(eraTokenRewards)
+                    .div(eraTotalStakedAmounts)
+                    .add(quarterlyReward);
+            }
+        }
+
+        return (quarterlyReward, lastQuartelyWithdrawTime);
+    }
+
+    /**
+     * @dev API to withdraw treasury rewards to staker's wallet
+     */
+    function withdrawTreasuryReward() external returns (bool) {
+        _withdrawTreasuryReward();
+        return true;
+    }
+
+    /**
+     * @dev API to withdraw Quarterly rewards to staker's wallet
+     */
+    function withdrawQuarterlyReward() external returns (bool) {
+        _withdrawQuarterlyReward();
         return true;
     }
 
@@ -684,12 +879,12 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev API to get the staker's started time the staking
      */
-    function userLastWithrewTime(address account_)
+    function userlastWithdrawTime(address account_)
         external
         view
         returns (uint256)
     {
-        return _stakers[account_].lastWithrewTime;
+        return _stakers[account_].lastWithdrawTime;
     }
 
     /**
@@ -730,18 +925,23 @@ contract YZYVault is Context, Ownable {
         require(tokenAmount > 0, "Insufficient amount");
 
         IYZY(_yzyAddress).transferWithoutFee(_msgSender(), tokenAmount);
-        emit EmergencyWithdrewToken(address(this), _msgSender(), tokenAmount);
+        emit EmergencyWithdrawToken(address(this), _msgSender(), tokenAmount);
     }
 
     /**
      * @dev Low level withdraw internal function
      */
-    function _withdrawReward() internal {
-        (uint256 rewards, uint256 lastWithrewTime) = getReward(_msgSender());
+    function _withdrawTreasuryReward() internal {
+        (uint256 rewards, uint256 lastWithdrawTime) =
+            getTreasuryReward(_msgSender());
 
         require(rewards > 0, "No reward state");
 
-        uint256 devFeeAmount = rewards.mul(uint256(_devFee)).div(10000);
+        uint256 treasureDevFee = uint256(_treasuryFee).add(uint256(_devFee));
+        uint256 devFeeAmount =
+            rewards.mul(uint256(_devFee)).div(10000).mul(treasureDevFee).div(
+                10000
+            );
         uint256 actualRewards = rewards.sub(devFeeAmount);
 
         // Transfer reward tokens from contract to staker
@@ -757,9 +957,39 @@ contract YZYVault is Context, Ownable {
         );
 
         // update user's last withrew time
-        _stakers[_msgSender()].lastWithrewTime = lastWithrewTime;
+        _stakers[_msgSender()].lastWithdrawTime = lastWithdrawTime;
 
-        emit WithdrewReward(_msgSender(), rewards);
+        emit WithdrawTreasuryReward(_msgSender(), rewards);
+    }
+
+    /**
+     * @dev Low level withdraw internal function
+     */
+    function _withdrawQuarterlyReward() internal {
+        (uint256 rewards, uint256 lastQuartelyWithdrawTime) =
+            getQuarterlyReward(_msgSender());
+
+        require(rewards > 0, "No reward state");
+
+        uint256 yfiTokenReward = rewards.mul(_buyingYFITokenFee).div(10000);
+        uint256 wbtcTokenReward = rewards.mul(_buyingWBTCTokenFee).div(10000);
+        uint256 wethTokenReward =
+            rewards.sub(yfiTokenReward).sub(wbtcTokenReward);
+
+        // Swap YFY -> YFI and give YFI token to User as reward
+        swapTokensForTokens(_yfiTokenAddress, yfiTokenReward);
+
+        // Swap YFY -> WBTC and give WBTC token to User as reward
+        swapTokensForTokens(_wbtcTokenAddress, wbtcTokenReward);
+
+        // Swap YFY -> WETH and give WETH token to User as reward
+        swapTokensForTokens(_wethTokenAddress, wethTokenReward);
+
+        // update user's last withrew time
+        _stakers[_msgSender()]
+            .lastQuartelyWithdrawTime = lastQuartelyWithdrawTime;
+
+        emit WithdrawQuartelyReward(_msgSender(), rewards);
     }
 
     /**

@@ -13,7 +13,7 @@ import "./IYZYVault.sol";
  *
  * Name        : YZYToken
  * Symbol      : YZY
- * Total supply: 10,000 (10 thousands)
+ * Total supply: 11,000 (11 thousands)
  * Decimals    : 18
  *
  * ERC20 Token, with the Burnable, Pausable and Ownable from OpenZeppelin

@@ -144,19 +144,8 @@ contract YZYVault is Context, Ownable {
         _;
     }
 
-    constructor(
-        address yzyContractAddress,
-        address uniswapV2PairAddress,
-        address yfiTokenAddress,
-        address wbtcTokenAddress,
-        address wethTokenAddress,
-        address uniswapV2Router
-    ) {
-        _yzyAddress = yzyContractAddress;
-        _uniswapV2Pair = uniswapV2PairAddress;
-        _yfiTokenAddress = yfiTokenAddress;
-        _wbtcTokenAddress = wbtcTokenAddress;
-        _wethTokenAddress = wethTokenAddress;
+    constructor(address yzyTokenAddress, address uniswapV2Router) {
+        _yzyAddress = yzyTokenAddress;
         _uniswapV2Router = IUniswapV2Router02(uniswapV2Router);
 
         _rewardPeriod = 14 days;

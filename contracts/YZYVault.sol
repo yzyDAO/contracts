@@ -28,7 +28,7 @@ contract YZYVault is Context, Ownable {
     uint16 private _buyingWBTCTokenFee;
     uint16 private _buyingWETHTokenFee;
 
-    IUniswapV2Router02 public immutable _uniswapV2Router;
+    IUniswapV2Router02 private _uniswapV2Router;
 
     // Period of reward distribution to stakers
     // It is `1 days` by default and could be changed
@@ -37,6 +37,7 @@ contract YZYVault is Context, Ownable {
     uint256 private _buyingTokenRewardPeriod;
     uint256 private _maxLockPeriod;
     uint256 private _minLockPeriod;
+    uint256 private _minDepositETHAmount;
     bool private _enabledLock;
 
     // save the timestamp for every period's reward
@@ -67,6 +68,10 @@ contract YZYVault is Context, Ownable {
     event DisabledLock(address indexed governance);
     event ChangedMaximumLockPeriod(address indexed governance, uint256 value);
     event ChangedMinimumLockPeriod(address indexed governance, uint256 value);
+    event ChangedMinimumETHDepositAmount(
+        address indexed governance,
+        uint256 value
+    );
     event ChangedRewardPeriod(address indexed governance, uint256 value);
     event ChangeBuyingTokenRewardPeriod(
         address indexed governance,
@@ -115,7 +120,7 @@ contract YZYVault is Context, Ownable {
     event ChangeBuyingWBTCTokenFee(address indexed governance, uint16 value);
     event ChangeBuyingWETHTokenFee(address indexed governance, uint16 value);
     event SwapAndLiquifyForYZY(
-        address msgSender,
+        address indexed msgSender,
         uint256 totAmount,
         uint256 ethAmount,
         uint256 yzyAmount
@@ -161,9 +166,28 @@ contract YZYVault is Context, Ownable {
         _buyingWBTCTokenFee = 3000; // 30% of buyingTokenFee to buy WBTC token
         _buyingWETHTokenFee = 2000; // 20% of buyingTokenFee to buy WETH token
 
+        _minDepositETHAmount = 1 ether;
         _maxLockPeriod = 365 days; // around 1 year
         _minLockPeriod = 90 days; // around 3 months
         _enabledLock = true;
+    }
+
+    /**
+     * @dev Return minium Deposit ETH Amount
+     */
+    function minimumDepositETHAmount() external view returns (uint256) {
+        return _minDepositETHAmount;
+    }
+
+    /**
+     * @dev Change Minimum Deposit ETH Amount. Call by only Governance.
+     */
+    function changeMinimumDepositETHAmount(uint256 minDepositETHAmount_)
+        external
+        onlyGovernance
+    {
+        _minDepositETHAmount = minDepositETHAmount_;
+        emit ChangedMinimumETHDepositAmount(governance(), minDepositETHAmount_);
     }
 
     /**
@@ -522,6 +546,15 @@ contract YZYVault is Context, Ownable {
         uint256 rewardAmount = amount_.mul(treasureDevFee).div(10000);
         uint256 buyingTokenRewardAmount = amount_.sub(rewardAmount);
 
+        require(
+            rewardAmount > 0,
+            "Treasure Reward Amount must be more than Zero"
+        );
+        require(
+            buyingTokenRewardAmount > 0,
+            "Quarterly Reward Amount must be more than Zero"
+        );
+
         // Update Era Reward Amount
         if (blockTime.sub(_lastRewardedTime) >= _rewardPeriod) {
             uint256 currentTime = _lastRewardedTime.add(_rewardPeriod);
@@ -582,7 +615,7 @@ contract YZYVault is Context, Ownable {
         );
     }
 
-    function swapAndLiquifyForYZY(uint256 amount) private {
+    function swapAndLiquifyForYZY(uint256 amount) private returns (bool) {
         uint256 halfForEth = amount.div(2);
         uint256 otherHalfForYZY = amount.sub(halfForEth);
 
@@ -603,10 +636,13 @@ contract YZYVault is Context, Ownable {
         addLiquidityForEth(newBalance, halfForEth);
 
         emit SwapAndLiquifyForYZY(_msgSender(), amount, halfForEth, newBalance);
+
+        return true;
     }
 
     function swapTokensForTokens(address pairTokenAddress, uint256 tokenAmount)
         private
+        returns (bool)
     {
         address[] memory path = new address[](2);
         path[0] = address(_yzyAddress);
@@ -620,36 +656,54 @@ contract YZYVault is Context, Ownable {
             _msgSender(),
             block.timestamp
         );
+
+        return true;
     }
 
-    /**
-     * @dev Stake ETH to get YZY-ETH LP tokens
-     */
-    function stake(uint256 amount_, uint256 lockTime) external {
+    receive() external payable {}
+
+    function stake(uint256 lockTime) external payable {
+        uint256 amount_ = msg.value;
+
         require(!_isContract(_msgSender()), "Could not be a contract");
-        require(amount_ > 0, "Staking amount must be more than zero");
+        require(
+            amount_ >= _minDepositETHAmount,
+            "ETH Staking amount must be more than min Deposit Amount."
+        );
         require(
             lockTime <= _maxLockPeriod && lockTime >= _minLockPeriod,
             "Invalid lock time"
         );
 
+        _stake(amount_, lockTime);
+    }
+
+    /**
+     * @dev Stake ETH to get YZY-ETH LP tokens
+     */
+    function _stake(uint256 amount_, uint256 lockTime) internal {
         // Check Initial Balance
         uint256 initialBalance =
             IERC20(_uniswapV2Pair).balanceOf(address(this));
 
         // Call swap for YZY&ETH
-        swapAndLiquifyForYZY(amount_);
-        uint256 newBlance =
+        require(
+            swapAndLiquifyForYZY(amount_),
+            "It is failed to swap between YZY and ETH and get LP tokens."
+        );
+        uint256 newBalance =
             IERC20(_uniswapV2Pair).balanceOf(address(this)).sub(initialBalance);
 
+        require(newBalance > 0, "YZY Staking amount must be more than zero");
+
         // Increase the total staked amount
-        _totalStakedAmount = _totalStakedAmount.add(newBlance);
+        _totalStakedAmount = _totalStakedAmount.add(newBalance);
 
         // Increase era staked amount
         _eraTotalStakedAmounts[_lastRewardedTime] = _eraTotalStakedAmounts[
             _lastRewardedTime
         ]
-            .add(newBlance);
+            .add(newBalance);
 
         if (_stakers[_msgSender()].lastWithdrawTime == 0) {
             _stakers[_msgSender()].lastWithdrawTime = _lastRewardedTime;
@@ -665,13 +719,13 @@ contract YZYVault is Context, Ownable {
         _userEraStakedAmounts[_lastRewardedTime][
             _msgSender()
         ] = _userEraStakedAmounts[_lastRewardedTime][_msgSender()].add(
-            newBlance
+            newBalance
         );
         _stakers[_msgSender()].totalStakedAmount = _stakers[_msgSender()]
             .totalStakedAmount
-            .add(newBlance);
+            .add(newBalance);
 
-        emit Staked(_msgSender(), newBlance);
+        emit Staked(_msgSender(), newBalance);
     }
 
     /**
@@ -966,13 +1020,22 @@ contract YZYVault is Context, Ownable {
             rewards.sub(yfiTokenReward).sub(wbtcTokenReward);
 
         // Swap YFY -> YFI and give YFI token to User as reward
-        swapTokensForTokens(_yfiTokenAddress, yfiTokenReward);
+        require(
+            swapTokensForTokens(_yfiTokenAddress, yfiTokenReward),
+            "It is failed to swap and transfer YFI token to User as reward."
+        );
 
         // Swap YFY -> WBTC and give WBTC token to User as reward
-        swapTokensForTokens(_wbtcTokenAddress, wbtcTokenReward);
+        require(
+            swapTokensForTokens(_wbtcTokenAddress, wbtcTokenReward),
+            "It is failed to swap and transfer WBTC token to User as reward."
+        );
 
         // Swap YFY -> WETH and give WETH token to User as reward
-        swapTokensForTokens(_wethTokenAddress, wethTokenReward);
+        require(
+            swapTokensForTokens(_wethTokenAddress, wethTokenReward),
+            "It is failed to swap and transfer WETH token to User as reward."
+        );
 
         // update user's last withrew time
         _stakers[_msgSender()]

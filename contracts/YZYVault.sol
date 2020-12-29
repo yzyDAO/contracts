@@ -50,7 +50,7 @@ contract YZYVault is Context, Ownable {
     struct StakerInfo {
         uint256 totalStakedAmount;
         uint256 lastWithdrawTime;
-        uint256 lastQuartelyWithdrawTime;
+        uint256 lastQuarterlyWithdrawTime;
         uint256 lockedTo;
     }
 
@@ -59,6 +59,9 @@ contract YZYVault is Context, Ownable {
     mapping(uint256 => uint256) private _eraTotalStakedAmounts;
     mapping(uint256 => mapping(address => uint256))
         private _userEraStakedAmounts;
+    mapping(uint256 => uint256) private _eraTotalStakedQuarterlyAmounts;
+    mapping(uint256 => mapping(address => uint256))
+        private _userEraStakedQuartelyAmounts;
     mapping(address => StakerInfo) private _stakers;
 
     // Events
@@ -112,7 +115,7 @@ contract YZYVault is Context, Ownable {
         uint256 amount
     );
     event WithdrawTreasuryReward(address indexed staker, uint256 amount);
-    event WithdrawQuartelyReward(address indexed staker, uint256 amount);
+    event WithdrawQuarterlyReward(address indexed staker, uint256 amount);
     event ChangeTreasuryFee(address indexed governance, uint16 value);
     event ChangeDevFee(address indexed governance, uint16 value);
     event ChangeBuyingTokenFee(address indexed governance, uint16 value);
@@ -604,6 +607,8 @@ contract YZYVault is Context, Ownable {
     function addLiquidityForEth(uint256 tokenAmount, uint256 ethAmount)
         private
     {
+        IYZY(_yzyAddress).approve(address(_uniswapV2Router), tokenAmount);
+
         // add the liquidity
         _uniswapV2Router.addLiquidityETH{value: ethAmount}(
             _yzyAddress,
@@ -647,6 +652,8 @@ contract YZYVault is Context, Ownable {
         address[] memory path = new address[](2);
         path[0] = address(_yzyAddress);
         path[1] = pairTokenAddress;
+
+        IYZY(_yzyAddress).approve(address(_uniswapV2Router), tokenAmount);
 
         // make the swap
         _uniswapV2Router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
@@ -711,8 +718,15 @@ contract YZYVault is Context, Ownable {
             _stakerList.push(_msgSender());
         }
 
-        if (_stakers[_msgSender()].lastQuartelyWithdrawTime == 0) {
-            _stakers[_msgSender()].lastQuartelyWithdrawTime = _lastRewardedTime;
+        _eraTotalStakedQuarterlyAmounts[
+            _lastBuyingTokenRewardedTime
+        ] = _eraTotalStakedQuarterlyAmounts[_lastBuyingTokenRewardedTime].add(
+            newBalance
+        );
+
+        if (_stakers[_msgSender()].lastQuarterlyWithdrawTime == 0) {
+            _stakers[_msgSender()]
+                .lastQuarterlyWithdrawTime = _lastBuyingTokenRewardedTime;
         }
 
         // Increase staked amount of the staker
@@ -721,6 +735,14 @@ contract YZYVault is Context, Ownable {
         ] = _userEraStakedAmounts[_lastRewardedTime][_msgSender()].add(
             newBalance
         );
+
+        _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
+            _msgSender()
+        ] = _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
+            _msgSender()
+        ]
+            .add(newBalance);
+
         _stakers[_msgSender()].totalStakedAmount = _stakers[_msgSender()]
             .totalStakedAmount
             .add(newBalance);
@@ -736,8 +758,19 @@ contract YZYVault is Context, Ownable {
         uint256 amount = _stakers[_msgSender()].totalStakedAmount;
         require(amount > 0, "No running stake");
 
-        _withdrawTreasuryReward();
-        _withdrawQuarterlyReward();
+        // Check Treasurey Reward
+        (uint256 treasuryRewards, uint256 lastTreasureWithdrawTime) =
+            getTreasuryReward(_msgSender());
+        if (treasuryRewards > 0) {
+            _withdrawTreasuryReward();
+        }
+
+        // Check Quarterly Reward
+        (uint256 quarterlyRewards, uint256 lastQuarterlyWithdrawTime) =
+            getQuarterlyReward(_msgSender());
+        if (quarterlyRewards > 0) {
+            _withdrawQuarterlyReward();
+        }
 
         // Decrease the total staked amount
         _totalStakedAmount = _totalStakedAmount.sub(amount);
@@ -754,6 +787,29 @@ contract YZYVault is Context, Ownable {
                 _userEraStakedAmounts[rewardTime][_msgSender()] = 0;
             }
         }
+
+        uint256 lastStakedQuarterlyWithdrawTime =
+            _stakers[_msgSender()].lastQuarterlyWithdrawTime;
+        uint256 m =
+            blockTime.sub(lastStakedQuarterlyWithdrawTime).div(
+                _buyingTokenRewardPeriod
+            );
+        for (uint256 i = 0; i < m; i++) {
+            uint256 quarterlyRewardTime =
+                lastStakedQuarterlyWithdrawTime.add(
+                    _buyingTokenRewardPeriod.mul(i)
+                );
+            if (
+                _userEraStakedQuartelyAmounts[quarterlyRewardTime][
+                    _msgSender()
+                ] != 0
+            ) {
+                _userEraStakedQuartelyAmounts[quarterlyRewardTime][
+                    _msgSender()
+                ] = 0;
+            }
+        }
+
         // Initialize started time of user
         _stakers[_msgSender()].lastWithdrawTime = 0;
 
@@ -791,17 +847,20 @@ contract YZYVault is Context, Ownable {
         if (lastWithdrawTime > 0) {
             uint256 n = blockTime.sub(lastWithdrawTime).div(_rewardPeriod);
 
-            for (uint256 i = 1; i <= n; i++) {
+            for (uint256 i = 0; i < n; i++) {
                 lastWithdrawTime = lastWithdrawTime.add(_rewardPeriod.mul(i));
-                uint256 eraRewards = _eraRewards[lastWithdrawTime];
                 uint256 eraTotalStakedAmounts =
                     _eraTotalStakedAmounts[lastWithdrawTime];
-                uint256 stakedAmount =
-                    _userEraStakedAmounts[lastWithdrawTime][account_];
-                reward = stakedAmount
-                    .mul(eraRewards)
-                    .div(eraTotalStakedAmounts)
-                    .add(reward);
+
+                if (eraTotalStakedAmounts > 0) {
+                    uint256 eraRewards = _eraRewards[lastWithdrawTime];
+                    uint256 stakedAmount =
+                        _userEraStakedAmounts[lastWithdrawTime][account_];
+                    reward = stakedAmount
+                        .mul(eraRewards)
+                        .div(eraTotalStakedAmounts)
+                        .add(reward);
+                }
             }
         }
 
@@ -820,33 +879,38 @@ contract YZYVault is Context, Ownable {
 
         uint256 quarterlyReward = 0;
         uint256 blockTime = block.timestamp;
-        uint256 lastQuartelyWithdrawTime =
-            _stakers[account_].lastQuartelyWithdrawTime;
+        uint256 lastQuarterlyWithdrawTime =
+            _stakers[account_].lastQuarterlyWithdrawTime;
 
-        if (lastQuartelyWithdrawTime > 0) {
+        if (lastQuarterlyWithdrawTime > 0) {
             uint256 n =
-                blockTime.sub(lastQuartelyWithdrawTime).div(
+                blockTime.sub(lastQuarterlyWithdrawTime).div(
                     _buyingTokenRewardPeriod
                 );
 
-            for (uint256 i = 1; i <= n; i++) {
-                lastQuartelyWithdrawTime = lastQuartelyWithdrawTime.add(
+            for (uint256 i = 0; i < n; i++) {
+                lastQuarterlyWithdrawTime = lastQuarterlyWithdrawTime.add(
                     _buyingTokenRewardPeriod.mul(i)
                 );
-                uint256 eraTokenRewards =
-                    _eraTokenRewards[lastQuartelyWithdrawTime];
                 uint256 eraTotalStakedAmounts =
-                    _eraTotalStakedAmounts[lastQuartelyWithdrawTime];
-                uint256 stakedAmount =
-                    _userEraStakedAmounts[lastQuartelyWithdrawTime][account_];
-                quarterlyReward = stakedAmount
-                    .mul(eraTokenRewards)
-                    .div(eraTotalStakedAmounts)
-                    .add(quarterlyReward);
+                    _eraTotalStakedQuarterlyAmounts[lastQuarterlyWithdrawTime];
+
+                if (eraTotalStakedAmounts > 0) {
+                    uint256 eraTokenRewards =
+                        _eraTokenRewards[lastQuarterlyWithdrawTime];
+                    uint256 stakedAmount =
+                        _userEraStakedQuartelyAmounts[
+                            lastQuarterlyWithdrawTime
+                        ][account_];
+                    quarterlyReward = stakedAmount
+                        .mul(eraTokenRewards)
+                        .div(eraTotalStakedAmounts)
+                        .add(quarterlyReward);
+                }
             }
         }
 
-        return (quarterlyReward, lastQuartelyWithdrawTime);
+        return (quarterlyReward, lastQuarterlyWithdrawTime);
     }
 
     /**
@@ -873,10 +937,24 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
+     * @dev API to get the last quarterly rewarded time
+     */
+    function lastQuarterlyRewardedTime() external view returns (uint256) {
+        return _lastBuyingTokenRewardedTime;
+    }
+
+    /**
      * @dev API to get the era rewards
      */
     function eraReward(uint256 era_) external view returns (uint256) {
         return _eraRewards[era_];
+    }
+
+    /**
+     * @dev API to get the era token rewards
+     */
+    function eraTokenReward(uint256 era_) external view returns (uint256) {
+        return _eraTokenRewards[era_];
     }
 
     /**
@@ -922,12 +1000,23 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev API to get the staker's started time the staking
      */
-    function userlastWithdrawTime(address account_)
+    function userlastTreasuryRewardWithdrawTime(address account_)
         external
         view
         returns (uint256)
     {
         return _stakers[account_].lastWithdrawTime;
+    }
+
+    /**
+     * @dev API to get the staker's started time the staking
+     */
+    function userlastQuarterlyRewardWithdrawTime(address account_)
+        external
+        view
+        returns (uint256)
+    {
+        return _stakers[account_].lastQuarterlyWithdrawTime;
     }
 
     /**
@@ -1009,7 +1098,7 @@ contract YZYVault is Context, Ownable {
      * @dev Low level withdraw internal function
      */
     function _withdrawQuarterlyReward() internal {
-        (uint256 rewards, uint256 lastQuartelyWithdrawTime) =
+        (uint256 rewards, uint256 lastQuarterlyWithdrawTime) =
             getQuarterlyReward(_msgSender());
 
         require(rewards > 0, "No reward state");
@@ -1019,19 +1108,19 @@ contract YZYVault is Context, Ownable {
         uint256 wethTokenReward =
             rewards.sub(yfiTokenReward).sub(wbtcTokenReward);
 
-        // Swap YFY -> YFI and give YFI token to User as reward
+        // Swap YZY -> YFI and give YFI token to User as reward
         require(
             swapTokensForTokens(_yfiTokenAddress, yfiTokenReward),
             "It is failed to swap and transfer YFI token to User as reward."
         );
 
-        // Swap YFY -> WBTC and give WBTC token to User as reward
+        // Swap YZY -> WBTC and give WBTC token to User as reward
         require(
             swapTokensForTokens(_wbtcTokenAddress, wbtcTokenReward),
             "It is failed to swap and transfer WBTC token to User as reward."
         );
 
-        // Swap YFY -> WETH and give WETH token to User as reward
+        // Swap YZY -> WETH and give WETH token to User as reward
         require(
             swapTokensForTokens(_wethTokenAddress, wethTokenReward),
             "It is failed to swap and transfer WETH token to User as reward."
@@ -1039,9 +1128,9 @@ contract YZYVault is Context, Ownable {
 
         // update user's last withrew time
         _stakers[_msgSender()]
-            .lastQuartelyWithdrawTime = lastQuartelyWithdrawTime;
+            .lastQuarterlyWithdrawTime = lastQuarterlyWithdrawTime;
 
-        emit WithdrawQuartelyReward(_msgSender(), rewards);
+        emit WithdrawQuarterlyReward(_msgSender(), rewards);
     }
 
     /**

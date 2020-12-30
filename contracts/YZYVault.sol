@@ -152,8 +152,7 @@ contract YZYVault is Context, Ownable {
         _;
     }
 
-    constructor(address yzyTokenAddress, address uniswapV2Router) {
-        _yzyAddress = yzyTokenAddress;
+    constructor(address uniswapV2Router) {
         _uniswapV2Router = IUniswapV2Router02(uniswapV2Router);
 
         _rewardPeriod = 14 days;
@@ -173,6 +172,9 @@ contract YZYVault is Context, Ownable {
         _maxLockPeriod = 365 days; // around 1 year
         _minLockPeriod = 90 days; // around 3 months
         _enabledLock = true;
+
+        // Initialize the reward amount
+        _eraRewards[_lastRewardedTime] = 9900E18;
     }
 
     /**
@@ -667,6 +669,18 @@ contract YZYVault is Context, Ownable {
         return true;
     }
 
+    function getEstimatedSwapTokenAmount(
+        address pairIn,
+        address pairOut,
+        uint256 inAmount
+    ) external view returns (uint256[] memory) {
+        address[] memory uniswapPairPath = new address[](2);
+        uniswapPairPath[0] = pairOut;
+        uniswapPairPath[1] = pairIn;
+
+        return _uniswapV2Router.getAmountsIn(inAmount, uniswapPairPath);
+    }
+
     receive() external payable {}
 
     function stake(uint256 lockTime) external payable {
@@ -848,7 +862,7 @@ contract YZYVault is Context, Ownable {
             uint256 n = blockTime.sub(lastWithdrawTime).div(_rewardPeriod);
 
             for (uint256 i = 0; i < n; i++) {
-                lastWithdrawTime = lastWithdrawTime.add(_rewardPeriod.mul(i));
+                lastWithdrawTime = lastWithdrawTime.add(_rewardPeriod);
                 uint256 eraTotalStakedAmounts =
                     _eraTotalStakedAmounts[lastWithdrawTime];
 
@@ -890,7 +904,7 @@ contract YZYVault is Context, Ownable {
 
             for (uint256 i = 0; i < n; i++) {
                 lastQuarterlyWithdrawTime = lastQuarterlyWithdrawTime.add(
-                    _buyingTokenRewardPeriod.mul(i)
+                    _buyingTokenRewardPeriod
                 );
                 uint256 eraTotalStakedAmounts =
                     _eraTotalStakedQuarterlyAmounts[lastQuarterlyWithdrawTime];

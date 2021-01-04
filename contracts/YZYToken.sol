@@ -4,9 +4,9 @@ pragma solidity >=0.6.0 <0.8.0;
 
 import "./Context.sol";
 import "./SafeMath.sol";
-import "./Pausable.sol";
 import "./IERC20.sol";
 import "./IYZYVault.sol";
+import "./Ownable.sol";
 
 /**
  * 'YZY' token contract
@@ -18,7 +18,7 @@ import "./IYZYVault.sol";
  *
  * ERC20 Token, with the Burnable, Pausable and Ownable from OpenZeppelin
  */
-contract YZYToken is Context, IERC20, Pausable {
+contract YZYToken is Context, IERC20, Ownable {
     using SafeMath for uint256;
 
     mapping(address => uint256) private _balances;
@@ -138,7 +138,6 @@ contract YZYToken is Context, IERC20, Pausable {
         public
         virtual
         override
-        whenNotPaused
         returns (bool)
     {
         uint256 taxAmount = amount.mul(uint256(transferFee())).div(10000);
@@ -197,7 +196,7 @@ contract YZYToken is Context, IERC20, Pausable {
         address sender,
         address recipient,
         uint256 amount
-    ) public virtual override whenNotPaused returns (bool) {
+    ) public virtual override returns (bool) {
         uint256 feeAmount = amount.mul(uint256(transferFee())).div(10000);
         uint256 leftAmount = amount.sub(feeAmount);
 

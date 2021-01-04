@@ -411,7 +411,7 @@ contract YZYVault is Context, Ownable {
 
     /**
      * @dev Update dev address by the previous dev.
-     * Note onlyOwner functions are meant for the governance contract
+     * Note onlyGovernance functions are meant for the governance contract
      * allowing YZY governance token holders to do this functions.
      */
     function changeDevFeeReciever(address devAddress_) external onlyGovernance {
@@ -721,47 +721,87 @@ contract YZYVault is Context, Ownable {
         _totalStakedAmount = _totalStakedAmount.add(newBalance);
 
         // Increase era staked amount
-        _eraTotalStakedAmounts[_lastRewardedTime] = _eraTotalStakedAmounts[
-            _lastRewardedTime
-        ]
-            .add(newBalance);
+        _eraTotalStakedAmounts[_lastRewardedTime] = _totalStakedAmount;
 
         if (_stakers[_msgSender()].lastWithdrawTime == 0) {
-            _stakers[_msgSender()].lastWithdrawTime = _lastRewardedTime;
+            _stakers[_msgSender()].lastWithdrawTime = _contractStartTime;
             _stakers[_msgSender()].lockedTo = lockTime.add(block.timestamp);
             _stakerList.push(_msgSender());
         }
 
         _eraTotalStakedQuarterlyAmounts[
             _lastBuyingTokenRewardedTime
-        ] = _eraTotalStakedQuarterlyAmounts[_lastBuyingTokenRewardedTime].add(
-            newBalance
-        );
+        ] = _totalStakedAmount;
 
         if (_stakers[_msgSender()].lastQuarterlyWithdrawTime == 0) {
             _stakers[_msgSender()]
-                .lastQuarterlyWithdrawTime = _lastBuyingTokenRewardedTime;
+                .lastQuarterlyWithdrawTime = _contractStartTime;
         }
 
         // Increase staked amount of the staker
-        _userEraStakedAmounts[_lastRewardedTime][
-            _msgSender()
-        ] = _userEraStakedAmounts[_lastRewardedTime][_msgSender()].add(
-            newBalance
-        );
-
-        _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
-            _msgSender()
-        ] = _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
-            _msgSender()
-        ]
-            .add(newBalance);
-
         _stakers[_msgSender()].totalStakedAmount = _stakers[_msgSender()]
             .totalStakedAmount
             .add(newBalance);
 
+        _userEraStakedAmounts[_lastRewardedTime][_msgSender()] = _stakers[
+            _msgSender()
+        ]
+            .totalStakedAmount;
+
+        _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
+            _msgSender()
+        ] = _stakers[_msgSender()].totalStakedAmount;
+
         emit Staked(_msgSender(), newBalance);
+    }
+
+    /**
+     * @dev Stake LP Token to get YZY-ETH LP tokens
+     */
+    function stakeLPToken(uint256 amount_, uint256 lockTime) external {
+        require(!_isContract(_msgSender()), "Could not be a contract");
+        require(amount_ > 0, "LP Staking amount must be more than zero.");
+        require(
+            lockTime <= _maxLockPeriod && lockTime >= _minLockPeriod,
+            "Invalid lock time"
+        );
+
+        // Increase the total staked amount
+        _totalStakedAmount = _totalStakedAmount.add(amount_);
+
+        // Increase era staked amount
+        _eraTotalStakedAmounts[_lastRewardedTime] = _totalStakedAmount;
+
+        if (_stakers[_msgSender()].lastWithdrawTime == 0) {
+            _stakers[_msgSender()].lastWithdrawTime = _contractStartTime;
+            _stakers[_msgSender()].lockedTo = lockTime.add(block.timestamp);
+            _stakerList.push(_msgSender());
+        }
+
+        _eraTotalStakedQuarterlyAmounts[
+            _lastBuyingTokenRewardedTime
+        ] = _totalStakedAmount;
+
+        if (_stakers[_msgSender()].lastQuarterlyWithdrawTime == 0) {
+            _stakers[_msgSender()]
+                .lastQuarterlyWithdrawTime = _contractStartTime;
+        }
+
+        // Increase staked amount of the staker
+        _stakers[_msgSender()].totalStakedAmount = _stakers[_msgSender()]
+            .totalStakedAmount
+            .add(amount_);
+
+        _userEraStakedAmounts[_lastRewardedTime][_msgSender()] = _stakers[
+            _msgSender()
+        ]
+            .totalStakedAmount;
+
+        _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
+            _msgSender()
+        ] = _stakers[_msgSender()].totalStakedAmount;
+
+        emit Staked(_msgSender(), amount_);
     }
 
     /**
@@ -857,28 +897,31 @@ contract YZYVault is Context, Ownable {
         uint256 reward = 0;
         uint256 blockTime = block.timestamp;
         uint256 lastWithdrawTime = _stakers[account_].lastWithdrawTime;
+        uint256 updateWithdrawTime = lastWithdrawTime;
 
         if (lastWithdrawTime > 0) {
             uint256 n = blockTime.sub(lastWithdrawTime).div(_rewardPeriod);
 
             for (uint256 i = 0; i < n; i++) {
-                lastWithdrawTime = lastWithdrawTime.add(_rewardPeriod);
+                uint256 currentWithdrawTime =
+                    lastWithdrawTime.add(_rewardPeriod.mul(i));
                 uint256 eraTotalStakedAmounts =
-                    _eraTotalStakedAmounts[lastWithdrawTime];
+                    _eraTotalStakedAmounts[currentWithdrawTime];
 
                 if (eraTotalStakedAmounts > 0) {
-                    uint256 eraRewards = _eraRewards[lastWithdrawTime];
+                    uint256 eraRewards = _eraRewards[currentWithdrawTime];
                     uint256 stakedAmount =
-                        _userEraStakedAmounts[lastWithdrawTime][account_];
+                        _userEraStakedAmounts[currentWithdrawTime][account_];
                     reward = stakedAmount
                         .mul(eraRewards)
                         .div(eraTotalStakedAmounts)
                         .add(reward);
                 }
+                updateWithdrawTime = currentWithdrawTime;
             }
         }
 
-        return (reward, lastWithdrawTime);
+        return (reward, updateWithdrawTime);
     }
 
     /**
@@ -895,6 +938,7 @@ contract YZYVault is Context, Ownable {
         uint256 blockTime = block.timestamp;
         uint256 lastQuarterlyWithdrawTime =
             _stakers[account_].lastQuarterlyWithdrawTime;
+        uint256 updateWithdrawTime = lastQuarterlyWithdrawTime;
 
         if (lastQuarterlyWithdrawTime > 0) {
             uint256 n =
@@ -903,28 +947,30 @@ contract YZYVault is Context, Ownable {
                 );
 
             for (uint256 i = 0; i < n; i++) {
-                lastQuarterlyWithdrawTime = lastQuarterlyWithdrawTime.add(
-                    _buyingTokenRewardPeriod
-                );
+                uint256 currentWithdrawTime =
+                    lastQuarterlyWithdrawTime.add(
+                        _buyingTokenRewardPeriod.mul(i)
+                    );
                 uint256 eraTotalStakedAmounts =
-                    _eraTotalStakedQuarterlyAmounts[lastQuarterlyWithdrawTime];
+                    _eraTotalStakedQuarterlyAmounts[currentWithdrawTime];
 
                 if (eraTotalStakedAmounts > 0) {
                     uint256 eraTokenRewards =
-                        _eraTokenRewards[lastQuarterlyWithdrawTime];
+                        _eraTokenRewards[currentWithdrawTime];
                     uint256 stakedAmount =
-                        _userEraStakedQuartelyAmounts[
-                            lastQuarterlyWithdrawTime
-                        ][account_];
+                        _userEraStakedQuartelyAmounts[currentWithdrawTime][
+                            account_
+                        ];
                     quarterlyReward = stakedAmount
                         .mul(eraTokenRewards)
                         .div(eraTotalStakedAmounts)
                         .add(quarterlyReward);
                 }
+                updateWithdrawTime = currentWithdrawTime;
             }
         }
 
-        return (quarterlyReward, lastQuarterlyWithdrawTime);
+        return (quarterlyReward, updateWithdrawTime);
     }
 
     /**

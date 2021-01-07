@@ -23,7 +23,7 @@ contract YZYVault is Context, Ownable {
 
     uint16 private _treasuryFee;
     uint16 private _devFee;
-    uint16 private _buyingTokenFee;
+    uint16 private _quarterlyFee;
     uint16 private _buyingYFITokenFee;
     uint16 private _buyingWBTCTokenFee;
     uint16 private _buyingWETHTokenFee;
@@ -33,39 +33,36 @@ contract YZYVault is Context, Ownable {
     // Period of reward distribution to stakers
     // It is `1 days` by default and could be changed
     // later only by Governance
-    uint256 private _rewardPeriod;
-    uint256 private _buyingTokenRewardPeriod;
+    uint256 private _treasuryRewardPeriod;
+    uint256 private _quarterlyRewardPeriod;
     uint256 private _maxLockPeriod;
     uint256 private _minLockPeriod;
     uint256 private _minDepositETHAmount;
     bool private _enabledLock;
 
     // save the timestamp for every period's reward
-    uint256 private _lastRewardedTime;
-    uint256 private _lastBuyingTokenRewardedTime;
+    uint256 private _lastTreasuryRewardedTime;
+    uint256 private _lastQuarterlyRewardedTime;
     uint256 private _contractStartTime;
     uint256 private _totalStakedAmount;
     address[] private _stakerList;
 
     struct StakerInfo {
         uint256 totalStakedAmount;
-        uint256 lastWithdrawTime;
-        uint256 lastQuarterlyWithdrawTime;
+        uint256 treasuryPendingReward;
+        uint256 treasuryAvailableReward;
+        uint256 quarterlyPendingReward;
+        uint256 quarterlyAvailableReward;
         uint256 lockedTo;
     }
 
-    mapping(uint256 => uint256) private _eraRewards;
-    mapping(uint256 => uint256) private _eraTokenRewards;
-    mapping(uint256 => uint256) private _eraTotalStakedAmounts;
-    mapping(uint256 => mapping(address => uint256))
-        private _userEraStakedAmounts;
-    mapping(uint256 => uint256) private _eraTotalStakedQuarterlyAmounts;
-    mapping(uint256 => mapping(address => uint256))
-        private _userEraStakedQuartelyAmounts;
+    uint256 _lastTreasuryReward;
+    uint256 _lastQuarterlyReward;
     mapping(address => StakerInfo) private _stakers;
 
     // Events
     event Staked(address indexed account, uint256 amount);
+    event LPStaked(address indexed account, uint256 amount);
     event Unstaked(address indexed account, uint256 amount);
     event EnabledLock(address indexed governance);
     event DisabledLock(address indexed governance);
@@ -75,8 +72,11 @@ contract YZYVault is Context, Ownable {
         address indexed governance,
         uint256 value
     );
-    event ChangedRewardPeriod(address indexed governance, uint256 value);
-    event ChangeBuyingTokenRewardPeriod(
+    event ChangedTreasuryRewardPeriod(
+        address indexed governance,
+        uint256 value
+    );
+    event ChangeQuarterlyRewardPeriod(
         address indexed governance,
         uint256 value
     );
@@ -118,7 +118,7 @@ contract YZYVault is Context, Ownable {
     event WithdrawQuarterlyReward(address indexed staker, uint256 amount);
     event ChangeTreasuryFee(address indexed governance, uint16 value);
     event ChangeDevFee(address indexed governance, uint16 value);
-    event ChangeBuyingTokenFee(address indexed governance, uint16 value);
+    event ChangeQuarterlyFee(address indexed governance, uint16 value);
     event ChangeBuyingYFITokenFee(address indexed governance, uint16 value);
     event ChangeBuyingWBTCTokenFee(address indexed governance, uint16 value);
     event ChangeBuyingWETHTokenFee(address indexed governance, uint16 value);
@@ -155,15 +155,15 @@ contract YZYVault is Context, Ownable {
     constructor(address uniswapV2Router) {
         _uniswapV2Router = IUniswapV2Router02(uniswapV2Router);
 
-        _rewardPeriod = 14 days;
-        _buyingTokenRewardPeriod = 90 days;
+        _treasuryRewardPeriod = 14 days;
+        _quarterlyRewardPeriod = 90 days;
         _contractStartTime = block.timestamp;
-        _lastRewardedTime = _contractStartTime;
-        _lastBuyingTokenRewardedTime = _contractStartTime;
+        _lastTreasuryRewardedTime = _contractStartTime;
+        _lastQuarterlyRewardedTime = _contractStartTime;
 
         _treasuryFee = 7600; // 76% of taxFee to treasuryFee
         _devFee = 400; // 4% of taxFee to devFee
-        _buyingTokenFee = 2000; // 20% of taxFee to buyingTokenFee
+        _quarterlyFee = 2000; // 20% of taxFee to buyingTokenFee
         _buyingYFITokenFee = 5000; // 50% of buyingTokenFee to buy YFI token
         _buyingWBTCTokenFee = 3000; // 30% of buyingTokenFee to buy WBTC token
         _buyingWETHTokenFee = 2000; // 20% of buyingTokenFee to buy WETH token
@@ -174,7 +174,8 @@ contract YZYVault is Context, Ownable {
         _enabledLock = true;
 
         // Initialize the reward amount
-        _eraRewards[_lastRewardedTime] = 9900E18;
+        _lastTreasuryReward = 7920E18;
+        _lastQuarterlyReward = 1980E18;
     }
 
     /**
@@ -250,10 +251,21 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return value of reward period
+     * @dev Return value of treasury reward period
      */
-    function rewardPeriod() external view returns (uint256) {
-        return _rewardPeriod;
+    function treasuryRewardPeriod() external view returns (uint256) {
+        return _treasuryRewardPeriod;
+    }
+
+    /**
+     * @dev Change value of treasury reward period. Call by only Governance.
+     */
+    function changeTreasuryRewardPeriod(uint256 treasuryRewardPeriod_)
+        external
+        onlyGovernance
+    {
+        _treasuryRewardPeriod = treasuryRewardPeriod_;
+        emit ChangedTreasuryRewardPeriod(governance(), treasuryRewardPeriod_);
     }
 
     /**
@@ -323,32 +335,21 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Change value of reward period. Call by only Governance.
+     * @dev Return value of quarterly reward period
      */
-    function changeRewardPeriod(uint256 rewardPeriod_) external onlyGovernance {
-        _rewardPeriod = rewardPeriod_;
-        emit ChangedRewardPeriod(governance(), rewardPeriod_);
+    function quarterlyRewardPeriod() external view returns (uint256) {
+        return _quarterlyRewardPeriod;
     }
 
     /**
-     * @dev Return value of buying token reward period
+     * @dev Change value of quarterly reward period. Call by only Governance.
      */
-    function buyingTokenRewardPeriod() external view returns (uint256) {
-        return _buyingTokenRewardPeriod;
-    }
-
-    /**
-     * @dev Change value of reward period. Call by only Governance.
-     */
-    function changeBuyingTokenRewardPeriod(uint256 buyingTokenRewardPeriod_)
+    function changeQuarterlyRewardPeriod(uint256 quarterlyRewardPeriod_)
         external
         onlyGovernance
     {
-        _buyingTokenRewardPeriod = buyingTokenRewardPeriod_;
-        emit ChangeBuyingTokenRewardPeriod(
-            governance(),
-            buyingTokenRewardPeriod_
-        );
+        _quarterlyRewardPeriod = quarterlyRewardPeriod_;
+        emit ChangeQuarterlyRewardPeriod(governance(), quarterlyRewardPeriod_);
     }
 
     /**
@@ -455,23 +456,20 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return BuyingToken fee
+     * @dev Return Quarterly fee
      */
-    function buyingTokenFee() external view returns (uint16) {
-        return _buyingTokenFee;
+    function quarterlyFee() external view returns (uint16) {
+        return _quarterlyFee;
     }
 
     /**
-     * @dev Update the buying token fee for this contract
+     * @dev Update the Quarterly fee for this contract
      * defaults at 20.00% of taxFee, It can be set on only by YZY governance.
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
      */
-    function changeBuyingTokenFee(uint16 buyingTokenFee_)
-        external
-        onlyGovernance
-    {
-        _buyingTokenFee = buyingTokenFee_;
-        emit ChangeBuyingTokenFee(governance(), buyingTokenFee_);
+    function changeQuarterlyFee(uint16 quarterlyFee_) external onlyGovernance {
+        _quarterlyFee = quarterlyFee_;
+        emit ChangeQuarterlyFee(governance(), quarterlyFee_);
     }
 
     /**
@@ -542,54 +540,179 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
+     * @dev get last era time
+     */
+    function _getLastEraTime(
+        uint256 lastUpdateTime,
+        uint256 currentTime,
+        uint256 periodTime
+    ) internal pure returns (uint256) {
+        require(
+            lastUpdateTime < currentTime,
+            "Current Time should be more than last update time."
+        );
+
+        uint256 n = currentTime.sub(lastUpdateTime).div(periodTime);
+        uint256 lastEraTime = lastUpdateTime.add(periodTime.mul(n));
+
+        return lastEraTime;
+    }
+
+    /**
+     * @dev Update Staker's Treasury Available Rewards
+     */
+    function _updateTreasuryAvailableRewards() internal {
+        // For All Stakers
+        for (uint256 i = 0; i < _stakerList.length; i++) {
+            // Get Staker
+            address staker = _stakerList[i];
+
+            // Update Staker's Treasury available reward
+            _stakers[staker].treasuryAvailableReward = _stakers[staker]
+                .treasuryAvailableReward
+                .add(_stakers[staker].treasuryPendingReward);
+            // Update Staker's Treasury pending reward
+            _stakers[staker].treasuryPendingReward = 0;
+        }
+    }
+
+    /**
+     * @dev Update Staker's Quarterly Available Rewards
+     */
+    function _updateQuarterlyAvailableRewards() internal {
+        // For All Stakers
+        for (uint256 i = 0; i < _stakerList.length; i++) {
+            // Get Staker
+            address staker = _stakerList[i];
+
+            // Update Staker's Quarterly available reward
+            _stakers[staker].quarterlyAvailableReward = _stakers[staker]
+                .quarterlyAvailableReward
+                .add(_stakers[staker].quarterlyPendingReward);
+            // Update Staker's Quarterly pending reward
+            _stakers[staker].quarterlyPendingReward = 0;
+        }
+    }
+
+    /**
+     * @dev Update Staker's Treasury Pending Rewards
+     */
+    function _updateTreasuryPendingRewards() internal {
+        if (_totalStakedAmount > 0) {
+            // For All Stakers
+            for (uint256 i = 0; i < _stakerList.length; i++) {
+                // Get Staker
+                address staker = _stakerList[i];
+
+                // Update Staker's Treasury Pending Reward
+                _stakers[staker].treasuryPendingReward = _lastTreasuryReward
+                    .mul(_stakers[staker].totalStakedAmount)
+                    .div(_totalStakedAmount);
+            }
+        }
+    }
+
+    /**
+     * @dev Update Staker's Quarterly Pending Rewards
+     */
+    function _updateQuarterlyPendingRewards() internal {
+        if (_totalStakedAmount > 0) {
+            // For All Stakers
+            for (uint256 i = 0; i < _stakerList.length; i++) {
+                // Get Staker
+                address staker = _stakerList[i];
+
+                // Update Staker's Quarterly Pending Reward
+                _stakers[staker].quarterlyPendingReward = _lastQuarterlyReward
+                    .mul(_stakers[staker].totalStakedAmount)
+                    .div(_totalStakedAmount);
+            }
+        }
+    }
+
+    /**
+     * @dev Update Staker's Reward
+     * Note Call by only YZY token contract
+     */
+    function _updateStakerRewards(
+        uint256 updateTreasuryReward,
+        uint256 updateQuarterlyReward
+    ) internal {
+        uint256 blockTime = block.timestamp;
+
+        // Update Era Treasury Reward
+        if (blockTime.sub(_lastTreasuryRewardedTime) >= _treasuryRewardPeriod) {
+            // Get Last Treasury Reward Time
+            uint256 currentTime =
+                _getLastEraTime(
+                    _lastTreasuryRewardedTime,
+                    blockTime,
+                    _treasuryRewardPeriod
+                );
+
+            // Update Last Treasury Reward Time
+            _lastTreasuryRewardedTime = currentTime;
+            // Update Staker's Treasury Available Rewards
+            _updateTreasuryAvailableRewards();
+            // Update Last Treasury Reward
+            _lastTreasuryReward = updateTreasuryReward;
+            // Update Staker's Treasury Pending Rewards
+            _updateTreasuryPendingRewards();
+        } else {
+            // Update Last Treasury Reward
+            _lastTreasuryReward += updateTreasuryReward;
+            // Update Staker's Treasury Pending Rewards
+            _updateTreasuryPendingRewards();
+        }
+
+        // Update Era Quarterly Reward
+        if (
+            blockTime.sub(_lastQuarterlyRewardedTime) >= _quarterlyRewardPeriod
+        ) {
+            // Get Last Quarterly Reward Time
+            uint256 currentTime =
+                _getLastEraTime(
+                    _lastQuarterlyRewardedTime,
+                    blockTime,
+                    _quarterlyRewardPeriod
+                );
+
+            // Update Last Quarterly Reward Time
+            _lastQuarterlyRewardedTime = currentTime;
+            // Update Staker's Quarterly Available Rewards
+            _updateQuarterlyAvailableRewards();
+            // Update Last Quarterly Reward
+            _lastQuarterlyReward = updateQuarterlyReward;
+            // Update Staker's Quarterly Pending Rewards
+            _updateQuarterlyPendingRewards();
+        } else {
+            // Update Last Quarterly Reward
+            _lastQuarterlyReward += updateQuarterlyReward;
+            // Update Staker's Quarterly Pending Rewards
+            _updateQuarterlyPendingRewards();
+        }
+    }
+
+    /**
      * @dev Add fee to era reward variable
      * Note Call by only YZY token contract
      */
     function addEraReward(uint256 amount_) external onlyYzy returns (bool) {
-        uint256 blockTime = block.timestamp;
         uint256 treasureDevFee = uint256(_treasuryFee).add(uint256(_devFee));
-        uint256 rewardAmount = amount_.mul(treasureDevFee).div(10000);
-        uint256 buyingTokenRewardAmount = amount_.sub(rewardAmount);
+        uint256 treasuryRewardAmount = amount_.mul(treasureDevFee).div(10000);
+        uint256 quarterlyRewardAmount = amount_.sub(treasuryRewardAmount);
 
         require(
-            rewardAmount > 0,
+            treasuryRewardAmount > 0,
             "Treasure Reward Amount must be more than Zero"
         );
         require(
-            buyingTokenRewardAmount > 0,
+            quarterlyRewardAmount > 0,
             "Quarterly Reward Amount must be more than Zero"
         );
 
-        // Update Era Reward Amount
-        if (blockTime.sub(_lastRewardedTime) >= _rewardPeriod) {
-            uint256 currentTime = _lastRewardedTime.add(_rewardPeriod);
-            _eraRewards[currentTime] = _eraRewards[currentTime].add(
-                rewardAmount
-            );
-            _lastRewardedTime = currentTime;
-        } else {
-            _eraRewards[_lastRewardedTime] = _eraRewards[_lastRewardedTime].add(
-                rewardAmount
-            );
-        }
-
-        // Update Era Buying Token Reward Amount
-        if (
-            blockTime.sub(_lastBuyingTokenRewardedTime) >=
-            _buyingTokenRewardPeriod
-        ) {
-            uint256 currentTime =
-                _lastBuyingTokenRewardedTime.add(_buyingTokenRewardPeriod);
-            _eraTokenRewards[currentTime] = _eraTokenRewards[currentTime].add(
-                buyingTokenRewardAmount
-            );
-            _lastBuyingTokenRewardedTime = currentTime;
-        } else {
-            _eraTokenRewards[_lastBuyingTokenRewardedTime] = _eraTokenRewards[
-                _lastBuyingTokenRewardedTime
-            ]
-                .add(buyingTokenRewardAmount);
-        }
+        // Update Staker's Rewards
+        _updateStakerRewards(treasuryRewardAmount, quarterlyRewardAmount);
 
         return true;
     }
@@ -720,22 +843,10 @@ contract YZYVault is Context, Ownable {
         // Increase the total staked amount
         _totalStakedAmount = _totalStakedAmount.add(newBalance);
 
-        // Increase era staked amount
-        _eraTotalStakedAmounts[_lastRewardedTime] = _totalStakedAmount;
-
-        if (_stakers[_msgSender()].lastWithdrawTime == 0) {
-            _stakers[_msgSender()].lastWithdrawTime = _contractStartTime;
+        // Update Staker's Locked Time
+        if (_stakers[_msgSender()].lockedTo == 0) {
             _stakers[_msgSender()].lockedTo = lockTime.add(block.timestamp);
             _stakerList.push(_msgSender());
-        }
-
-        _eraTotalStakedQuarterlyAmounts[
-            _lastBuyingTokenRewardedTime
-        ] = _totalStakedAmount;
-
-        if (_stakers[_msgSender()].lastQuarterlyWithdrawTime == 0) {
-            _stakers[_msgSender()]
-                .lastQuarterlyWithdrawTime = _contractStartTime;
         }
 
         // Increase staked amount of the staker
@@ -743,14 +854,8 @@ contract YZYVault is Context, Ownable {
             .totalStakedAmount
             .add(newBalance);
 
-        _userEraStakedAmounts[_lastRewardedTime][_msgSender()] = _stakers[
-            _msgSender()
-        ]
-            .totalStakedAmount;
-
-        _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
-            _msgSender()
-        ] = _stakers[_msgSender()].totalStakedAmount;
+        // Update Staker's Rewards
+        _updateStakerRewards(0, 0);
 
         emit Staked(_msgSender(), newBalance);
     }
@@ -769,39 +874,20 @@ contract YZYVault is Context, Ownable {
         // Increase the total staked amount
         _totalStakedAmount = _totalStakedAmount.add(amount_);
 
-        // Increase era staked amount
-        _eraTotalStakedAmounts[_lastRewardedTime] = _totalStakedAmount;
-
-        if (_stakers[_msgSender()].lastWithdrawTime == 0) {
-            _stakers[_msgSender()].lastWithdrawTime = _contractStartTime;
+        // Update Staker's Locked Time
+        if (_stakers[_msgSender()].lockedTo == 0) {
             _stakers[_msgSender()].lockedTo = lockTime.add(block.timestamp);
             _stakerList.push(_msgSender());
         }
-
-        _eraTotalStakedQuarterlyAmounts[
-            _lastBuyingTokenRewardedTime
-        ] = _totalStakedAmount;
-
-        if (_stakers[_msgSender()].lastQuarterlyWithdrawTime == 0) {
-            _stakers[_msgSender()]
-                .lastQuarterlyWithdrawTime = _contractStartTime;
-        }
-
         // Increase staked amount of the staker
         _stakers[_msgSender()].totalStakedAmount = _stakers[_msgSender()]
             .totalStakedAmount
             .add(amount_);
 
-        _userEraStakedAmounts[_lastRewardedTime][_msgSender()] = _stakers[
-            _msgSender()
-        ]
-            .totalStakedAmount;
+        // Update Staker's Rewards
+        _updateStakerRewards(0, 0);
 
-        _userEraStakedQuartelyAmounts[_lastBuyingTokenRewardedTime][
-            _msgSender()
-        ] = _stakers[_msgSender()].totalStakedAmount;
-
-        emit Staked(_msgSender(), amount_);
+        emit LPStaked(_msgSender(), amount_);
     }
 
     /**
@@ -812,165 +898,88 @@ contract YZYVault is Context, Ownable {
         uint256 amount = _stakers[_msgSender()].totalStakedAmount;
         require(amount > 0, "No running stake");
 
-        // Check Treasurey Reward
-        (uint256 treasuryRewards, uint256 lastTreasureWithdrawTime) =
-            getTreasuryReward(_msgSender());
-        if (treasuryRewards > 0) {
+        // Check Staker's Treasurey Reward
+        if (_stakers[_msgSender()].treasuryAvailableReward > 0) {
             _withdrawTreasuryReward();
         }
 
-        // Check Quarterly Reward
-        (uint256 quarterlyRewards, uint256 lastQuarterlyWithdrawTime) =
-            getQuarterlyReward(_msgSender());
-        if (quarterlyRewards > 0) {
+        // Check Staker's Quarterly Reward
+        if (_stakers[_msgSender()].quarterlyAvailableReward > 0) {
             _withdrawQuarterlyReward();
         }
 
         // Decrease the total staked amount
         _totalStakedAmount = _totalStakedAmount.sub(amount);
+        // Update Staker's Infos
         _stakers[_msgSender()].totalStakedAmount = 0;
+        _stakers[_msgSender()].treasuryPendingReward = 0;
+        _stakers[_msgSender()].treasuryAvailableReward = 0;
+        _stakers[_msgSender()].quarterlyPendingReward = 0;
+        _stakers[_msgSender()].quarterlyAvailableReward = 0;
+        _stakers[_msgSender()].lockedTo = 0;
 
-        // Decrease the staker's amount
-        uint256 blockTime = block.timestamp;
-        uint256 lastWithdrawTime = _stakers[_msgSender()].lastWithdrawTime;
-        uint256 n = blockTime.sub(lastWithdrawTime).div(_rewardPeriod);
-
-        for (uint256 i = 0; i < n; i++) {
-            uint256 rewardTime = lastWithdrawTime.add(_rewardPeriod.mul(i));
-            if (_userEraStakedAmounts[rewardTime][_msgSender()] != 0) {
-                _userEraStakedAmounts[rewardTime][_msgSender()] = 0;
-            }
-        }
-
-        uint256 lastStakedQuarterlyWithdrawTime =
-            _stakers[_msgSender()].lastQuarterlyWithdrawTime;
-        uint256 m =
-            blockTime.sub(lastStakedQuarterlyWithdrawTime).div(
-                _buyingTokenRewardPeriod
-            );
-        for (uint256 i = 0; i < m; i++) {
-            uint256 quarterlyRewardTime =
-                lastStakedQuarterlyWithdrawTime.add(
-                    _buyingTokenRewardPeriod.mul(i)
-                );
-            if (
-                _userEraStakedQuartelyAmounts[quarterlyRewardTime][
-                    _msgSender()
-                ] != 0
-            ) {
-                _userEraStakedQuartelyAmounts[quarterlyRewardTime][
-                    _msgSender()
-                ] = 0;
-            }
-        }
-
-        // Initialize started time of user
-        _stakers[_msgSender()].lastWithdrawTime = 0;
-
-        for (uint256 i = 0; i < _stakerList.length; i++) {
-            if (_stakerList[i] == _msgSender()) {
-                _stakerList[i] = _stakerList[_stakerList.length - 1];
-                _stakerList.pop();
-                break;
-            }
-        }
+        // Update Staker's Rewards
+        _updateStakerRewards(0, 0);
 
         // Transfer LP tokens from contract to staker
         require(
             IUniswapV2Pair(_uniswapV2Pair).transfer(_msgSender(), amount),
-            "It has failed to transfer tokens from contract to staker."
+            "It has failed to transfer LP tokens from contract to staker."
         );
 
         emit Unstaked(_msgSender(), amount);
     }
 
     /**
-     * @dev API to get staker's treasury reward
+     * @dev API to get staker's available treasury reward
      */
-    function getTreasuryReward(address account_)
+    function getTreasuryAvailableReward(address account_)
         public
         view
-        returns (uint256, uint256)
+        returns (uint256)
     {
         require(!_isContract(account_), "Could not be a contract");
 
-        uint256 reward = 0;
-        uint256 blockTime = block.timestamp;
-        uint256 lastWithdrawTime = _stakers[account_].lastWithdrawTime;
-        uint256 updateWithdrawTime = lastWithdrawTime;
-
-        if (lastWithdrawTime > 0) {
-            uint256 n = blockTime.sub(lastWithdrawTime).div(_rewardPeriod);
-
-            for (uint256 i = 0; i < n; i++) {
-                uint256 currentWithdrawTime =
-                    lastWithdrawTime.add(_rewardPeriod.mul(i));
-                uint256 eraTotalStakedAmounts =
-                    _eraTotalStakedAmounts[currentWithdrawTime];
-
-                if (eraTotalStakedAmounts > 0) {
-                    uint256 eraRewards = _eraRewards[currentWithdrawTime];
-                    uint256 stakedAmount =
-                        _userEraStakedAmounts[currentWithdrawTime][account_];
-                    reward = stakedAmount
-                        .mul(eraRewards)
-                        .div(eraTotalStakedAmounts)
-                        .add(reward);
-                }
-                updateWithdrawTime = currentWithdrawTime;
-            }
-        }
-
-        return (reward, updateWithdrawTime);
+        return _stakers[account_].treasuryAvailableReward;
     }
 
     /**
-     * @dev API to get staker's other token's reward
+     * @dev API to get staker's available quarterly reward
      */
-    function getQuarterlyReward(address account_)
+    function getQuarterlyAvailableReward(address account_)
         public
         view
-        returns (uint256, uint256)
+        returns (uint256)
     {
         require(!_isContract(account_), "Could not be a contract");
 
-        uint256 quarterlyReward = 0;
-        uint256 blockTime = block.timestamp;
-        uint256 lastQuarterlyWithdrawTime =
-            _stakers[account_].lastQuarterlyWithdrawTime;
-        uint256 updateWithdrawTime = lastQuarterlyWithdrawTime;
+        return _stakers[account_].quarterlyAvailableReward;
+    }
 
-        if (lastQuarterlyWithdrawTime > 0) {
-            uint256 n =
-                blockTime.sub(lastQuarterlyWithdrawTime).div(
-                    _buyingTokenRewardPeriod
-                );
+    /**
+     * @dev API to get staker's pending treasury reward
+     */
+    function getTreasuryPendingReward(address account_)
+        public
+        view
+        returns (uint256)
+    {
+        require(!_isContract(account_), "Could not be a contract");
 
-            for (uint256 i = 0; i < n; i++) {
-                uint256 currentWithdrawTime =
-                    lastQuarterlyWithdrawTime.add(
-                        _buyingTokenRewardPeriod.mul(i)
-                    );
-                uint256 eraTotalStakedAmounts =
-                    _eraTotalStakedQuarterlyAmounts[currentWithdrawTime];
+        return _stakers[account_].treasuryPendingReward;
+    }
 
-                if (eraTotalStakedAmounts > 0) {
-                    uint256 eraTokenRewards =
-                        _eraTokenRewards[currentWithdrawTime];
-                    uint256 stakedAmount =
-                        _userEraStakedQuartelyAmounts[currentWithdrawTime][
-                            account_
-                        ];
-                    quarterlyReward = stakedAmount
-                        .mul(eraTokenRewards)
-                        .div(eraTotalStakedAmounts)
-                        .add(quarterlyReward);
-                }
-                updateWithdrawTime = currentWithdrawTime;
-            }
-        }
+    /**
+     * @dev API to get staker's pending quarterly reward
+     */
+    function getQuarterlyPendingReward(address account_)
+        public
+        view
+        returns (uint256)
+    {
+        require(!_isContract(account_), "Could not be a contract");
 
-        return (quarterlyReward, updateWithdrawTime);
+        return _stakers[account_].quarterlyPendingReward;
     }
 
     /**
@@ -982,7 +991,7 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev API to withdraw Quarterly rewards to staker's wallet
+     * @dev API to withdraw quarterly rewards to staker's wallet
      */
     function withdrawQuarterlyReward() external returns (bool) {
         _withdrawQuarterlyReward();
@@ -990,31 +999,17 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev API to get the last rewarded time
+     * @dev API to get the last treasury rewarded time
      */
-    function lastRewardedTime() external view returns (uint256) {
-        return _lastRewardedTime;
+    function lastTreasuryRewardedTime() external view returns (uint256) {
+        return _lastTreasuryRewardedTime;
     }
 
     /**
      * @dev API to get the last quarterly rewarded time
      */
     function lastQuarterlyRewardedTime() external view returns (uint256) {
-        return _lastBuyingTokenRewardedTime;
-    }
-
-    /**
-     * @dev API to get the era rewards
-     */
-    function eraReward(uint256 era_) external view returns (uint256) {
-        return _eraRewards[era_];
-    }
-
-    /**
-     * @dev API to get the era token rewards
-     */
-    function eraTokenReward(uint256 era_) external view returns (uint256) {
-        return _eraTokenRewards[era_];
+        return _lastQuarterlyRewardedTime;
     }
 
     /**
@@ -1022,17 +1017,6 @@ contract YZYVault is Context, Ownable {
      */
     function totalStakedAmount() external view returns (uint256) {
         return _totalStakedAmount;
-    }
-
-    /**
-     * @dev API to get the total era staked amount of all stakers
-     */
-    function eraTotalStakedAmount(uint256 era_)
-        external
-        view
-        returns (uint256)
-    {
-        return _eraTotalStakedAmounts[era_];
     }
 
     /**
@@ -1044,39 +1028,6 @@ contract YZYVault is Context, Ownable {
         returns (uint256)
     {
         return _stakers[account_].totalStakedAmount;
-    }
-
-    /**
-     * @dev API to get the staker's staked amount
-     */
-    function userEraStakedAmount(uint256 era_, address account_)
-        external
-        view
-        returns (uint256)
-    {
-        return _userEraStakedAmounts[era_][account_];
-    }
-
-    /**
-     * @dev API to get the staker's started time the staking
-     */
-    function userlastTreasuryRewardWithdrawTime(address account_)
-        external
-        view
-        returns (uint256)
-    {
-        return _stakers[account_].lastWithdrawTime;
-    }
-
-    /**
-     * @dev API to get the staker's started time the staking
-     */
-    function userlastQuarterlyRewardWithdrawTime(address account_)
-        external
-        view
-        returns (uint256)
-    {
-        return _stakers[account_].lastQuarterlyWithdrawTime;
     }
 
     /**
@@ -1124,10 +1075,9 @@ contract YZYVault is Context, Ownable {
      * @dev Low level withdraw internal function
      */
     function _withdrawTreasuryReward() internal {
-        (uint256 rewards, uint256 lastWithdrawTime) =
-            getTreasuryReward(_msgSender());
+        uint256 rewards = _stakers[_msgSender()].treasuryAvailableReward;
 
-        require(rewards > 0, "No reward state");
+        require(rewards > 0, "No treasury reward state");
 
         uint256 treasureDevFee = uint256(_treasuryFee).add(uint256(_devFee));
         uint256 devFeeAmount =
@@ -1148,8 +1098,8 @@ contract YZYVault is Context, Ownable {
             "It has failed to transfer tokens from contract to dev address."
         );
 
-        // update user's last withrew time
-        _stakers[_msgSender()].lastWithdrawTime = lastWithdrawTime;
+        // Update Staker's Treasury Available Reward
+        _stakers[_msgSender()].treasuryAvailableReward = 0;
 
         emit WithdrawTreasuryReward(_msgSender(), rewards);
     }
@@ -1158,8 +1108,7 @@ contract YZYVault is Context, Ownable {
      * @dev Low level withdraw internal function
      */
     function _withdrawQuarterlyReward() internal {
-        (uint256 rewards, uint256 lastQuarterlyWithdrawTime) =
-            getQuarterlyReward(_msgSender());
+        uint256 rewards = _stakers[_msgSender()].quarterlyAvailableReward;
 
         require(rewards > 0, "No reward state");
 
@@ -1186,9 +1135,8 @@ contract YZYVault is Context, Ownable {
             "It is failed to swap and transfer WETH token to User as reward."
         );
 
-        // update user's last withrew time
-        _stakers[_msgSender()]
-            .lastQuarterlyWithdrawTime = lastQuarterlyWithdrawTime;
+        // Update Staker's Quarterly Available Reward
+        _stakers[_msgSender()].quarterlyAvailableReward = 0;
 
         emit WithdrawQuarterlyReward(_msgSender(), rewards);
     }

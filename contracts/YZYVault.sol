@@ -1152,14 +1152,14 @@ contract YZYVault is Context, Ownable {
 
         // Check Staker's Treasurey Reward
         uint256 treasuryAvailableReward =
-            getAvailableTreasuryReward(_msgSender());
+            getTreasuryAvailableReward(_msgSender());
         if (treasuryAvailableReward > 0) {
             _withdrawTreasuryReward(treasuryAvailableReward);
         }
 
         // Check Staker's Quarterly Reward
         uint256 quarterlyAvailableReward =
-            getAvailableQuarterlyReward(_msgSender());
+            getQuarterlyAvailableReward(_msgSender());
         if (quarterlyAvailableReward > 0) {
             _withdrawQuarterlyReward(quarterlyAvailableReward);
         }
@@ -1199,10 +1199,14 @@ contract YZYVault is Context, Ownable {
         uint256 totalStakedLength = _totalStakedList.length;
         uint256 j = 0;
 
+        if (totalStakedLength < 2) {
+            return 0;
+        }
+
         while (j < totalStakedLength - 1) {
             if (
-                _totalStakedList[j].blockNum <= currentBlockNum &&
-                _totalStakedList[j + 1].blockNum > currentBlockNum
+                _totalStakedList[j].blockNum >= currentBlockNum &&
+                _totalStakedList[j + 1].blockNum < currentBlockNum
             ) {
                 totalStakedAmount = _totalStakedList[j].stakedAmount;
                 break;
@@ -1211,7 +1215,7 @@ contract YZYVault is Context, Ownable {
             j = j.add(1);
         }
 
-        if (totalStakedAmount == 0) {
+        if (totalStakedAmount == 0 && j == totalStakedLength - 1) {
             totalStakedAmount = _totalStakedAmount;
         }
 
@@ -1240,10 +1244,14 @@ contract YZYVault is Context, Ownable {
         uint256 userStakedLength = _stakerInfoList[stakedAddress].length;
         uint256 j = 0;
 
+        if (userStakedLength < 2) {
+            return 0;
+        }
+
         while (j < userStakedLength - 1) {
             if (
-                _stakerInfoList[stakedAddress][j].blockNum <= currentBlockNum &&
-                _stakerInfoList[stakedAddress][j + 1].blockNum > currentBlockNum
+                _stakerInfoList[stakedAddress][j].blockNum >= currentBlockNum &&
+                _stakerInfoList[stakedAddress][j + 1].blockNum < currentBlockNum
             ) {
                 userStakedAmount = _stakerInfoList[stakedAddress][j]
                     .stakedAmount;
@@ -1274,7 +1282,7 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev API To Get Staker's Treasury Available Reward
      */
-    function getAvailableTreasuryReward(address account_)
+    function getTreasuryAvailableReward(address account_)
         public
         view
         returns (uint256)
@@ -1328,7 +1336,7 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev API To Get Staker's Treasury Pending Reward
      */
-    function getPendingTreasuryReward(address account_)
+    function getTreasuryPendingReward(address account_)
         public
         view
         returns (uint256)
@@ -1390,7 +1398,7 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev API To Get Staker's Quarterly Available Reward
      */
-    function getAvailableQuarterlyReward(address account_)
+    function getQuarterlyAvailableReward(address account_)
         public
         view
         returns (uint256)
@@ -1444,7 +1452,7 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev API To Get Staker's Quarterly Pending Reward
      */
-    function getPendingQuarterlyReward(address account_)
+    function getQuarterlyPendingReward(address account_)
         public
         view
         returns (uint256)
@@ -1509,7 +1517,7 @@ contract YZYVault is Context, Ownable {
     function withdrawTreasuryAvailableReward() external returns (bool) {
         // Get Treasury Available Reward
         uint256 treasuryAvailableReward =
-            getAvailableTreasuryReward(_msgSender());
+            getTreasuryAvailableReward(_msgSender());
 
         // Withdraw Treasury Available Reward
         _withdrawTreasuryReward(treasuryAvailableReward);
@@ -1530,7 +1538,7 @@ contract YZYVault is Context, Ownable {
     function withdrawQuarterlyAvailableReward() external returns (bool) {
         // Get Quarterly Available Reward
         uint256 quarterlyAvailableReward =
-            getAvailableQuarterlyReward(_msgSender());
+            getQuarterlyAvailableReward(_msgSender());
 
         // Withdraw Quarterly Available Reward
         _withdrawQuarterlyReward(quarterlyAvailableReward);
@@ -1552,10 +1560,10 @@ contract YZYVault is Context, Ownable {
     function withdrawTreasuryTotalReward() external returns (bool) {
         // Get Treasury Available Reward
         uint256 treasuryAvailableReward =
-            getAvailableTreasuryReward(_msgSender());
+            getTreasuryAvailableReward(_msgSender());
 
         // Get Treasury Pending Reward
-        uint256 treasuryPendingReward = getPendingTreasuryReward(_msgSender());
+        uint256 treasuryPendingReward = getTreasuryPendingReward(_msgSender());
 
         if (treasuryPendingReward > 0) {
             // Burn 20% of Treasury Pending Reward
@@ -1590,11 +1598,11 @@ contract YZYVault is Context, Ownable {
     function withdrawQuarterlyTotalReward() external returns (bool) {
         // Get Quarterly Available Reward
         uint256 quarterlyAvailableReward =
-            getAvailableQuarterlyReward(_msgSender());
+            getQuarterlyAvailableReward(_msgSender());
 
         // Get Quarterly Pending Reward
         uint256 quarterlyPendingReward =
-            getPendingQuarterlyReward(_msgSender());
+            getQuarterlyPendingReward(_msgSender());
 
         if (quarterlyPendingReward > 0) {
             // Burn 20% of Quarterly Pending Reward

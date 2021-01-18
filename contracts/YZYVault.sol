@@ -59,12 +59,14 @@ contract YZYVault is Context, Ownable {
     uint256 private _initialFirstQuarterlyReward;
     uint256 private _initialYearlyTreasuryReward;
     uint256 private _initialYearlyQuarterlyReward;
+    uint256 private _lastTreasuryReward;
+    uint256 private _lastQuarterlyReward;
 
     mapping(uint256 => uint256) private _blockTreasuryRewards;
     mapping(uint256 => uint256) private _blockQuarterlyRewards;
 
     struct StakerInfo {
-        uint256 totalStakedAmount;
+        uint256 stakedAmount;
         uint256 lastTreasuryRewardBlockNum;
         uint256 lastQuarterlyRewardBlockNum;
         uint256 lastUnStakedBlockNum;
@@ -73,10 +75,10 @@ contract YZYVault is Context, Ownable {
 
     struct BlockStakedInfo {
         uint256 blockNum;
-        uint256 stakedAmount;
+        uint256 totalStakedAmount;
+        uint256 userStakedAmount;
     }
 
-    BlockStakedInfo[] private _totalStakedList;
     mapping(address => BlockStakedInfo[]) private _stakerInfoList;
 
     mapping(address => StakerInfo) private _stakers;
@@ -238,77 +240,6 @@ contract YZYVault is Context, Ownable {
         _initialYearlyQuarterlyReward = (uint256)(7900E18)
             .sub(_initialYearlyTreasuryReward.mul(_yearlyRewardBlockCount))
             .div(_yearlyRewardBlockCount);
-
-        _totalStakedList.push(BlockStakedInfo(_initialBlockNum, 0));
-    }
-
-    /**
-     * @dev Return Staker Info
-     */
-    function getStakerInfo(address staker)
-        external
-        view
-        returns (
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            uint256
-        )
-    {
-        return (
-            _stakers[staker].totalStakedAmount,
-            _stakers[staker].lastTreasuryRewardBlockNum,
-            _stakers[staker].lastQuarterlyRewardBlockNum,
-            _stakers[staker].lastUnStakedBlockNum,
-            _stakers[staker].lockedTo
-        );
-    }
-
-    /**
-     * @dev Return Total Staked Length
-     */
-    function getTotalStakedLength() external view returns (uint256) {
-        return _totalStakedList.length;
-    }
-
-    /**
-     * @dev Return Total Staked Info
-     */
-    function getTotalStakedInfo(uint256 step)
-        external
-        view
-        returns (uint256, uint256)
-    {
-        return (
-            _totalStakedList[step].blockNum,
-            _totalStakedList[step].stakedAmount
-        );
-    }
-
-    /**
-     * @dev Return User Staked Length
-     */
-    function getUserStakedLength(address staker)
-        external
-        view
-        returns (uint256)
-    {
-        return _stakerInfoList[staker].length;
-    }
-
-    /**
-     * @dev Return User Staked Info
-     */
-    function getUserStakedInfo(address staker, uint256 step)
-        external
-        view
-        returns (uint256, uint256)
-    {
-        return (
-            _stakerInfoList[staker][step].blockNum,
-            _stakerInfoList[staker][step].stakedAmount
-        );
     }
 
     /**
@@ -709,154 +640,103 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Get Initial Treasury Block Reward
+     * @dev Get Treasury Period Reward
      */
-    function _getInitialTreasuryBlockReward(uint256 currentBlockNum)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 currrentTreasuryBlockReward = 0;
+    function _getTreasuryPeriodReward(
+        uint256 startBlockNum,
+        uint256 endBlockNum
+    ) internal view returns (uint256) {
+        if (startBlockNum > endBlockNum) {
+            return 0;
+        }
 
-        if (currentBlockNum > _initialBlockNum) {
-            // if Current Block Number is in Treasury First Reward Period
-            if (currentBlockNum <= _treasuryFirstRewardEndedBlockNum) {
-                currrentTreasuryBlockReward = _initialFirstTreasuryReward;
-            } else {
-                // if Current Block Number is in Yearly Reward Period but should pass Weekly Reward Period
-                if (currentBlockNum <= _yearlyRewardEndedBlockNum) {
-                    currrentTreasuryBlockReward = _initialYearlyTreasuryReward;
+        uint256 treasuryPeriodReward = 0;
+
+        // If Period is in First Reward Period
+        if (endBlockNum < _treasuryFirstRewardEndedBlockNum) {
+            treasuryPeriodReward = endBlockNum.sub(startBlockNum).mul(
+                _initialFirstTreasuryReward
+            );
+        } else {
+            if (
+                startBlockNum < _treasuryFirstRewardEndedBlockNum &&
+                endBlockNum < _yearlyRewardEndedBlockNum
+            ) {
+                treasuryPeriodReward = _treasuryFirstRewardEndedBlockNum
+                    .sub(startBlockNum)
+                    .mul(_initialFirstTreasuryReward);
+                treasuryPeriodReward = endBlockNum
+                    .sub(_treasuryFirstRewardEndedBlockNum)
+                    .mul(_initialYearlyTreasuryReward)
+                    .add(treasuryPeriodReward);
+            }
+            if (
+                startBlockNum > _treasuryFirstRewardEndedBlockNum &&
+                startBlockNum < _yearlyRewardEndedBlockNum
+            ) {
+                if (endBlockNum < _yearlyRewardEndedBlockNum) {
+                    treasuryPeriodReward = endBlockNum.sub(startBlockNum).mul(
+                        _initialYearlyTreasuryReward
+                    );
+                } else {
+                    treasuryPeriodReward = _yearlyRewardEndedBlockNum
+                        .sub(startBlockNum)
+                        .mul(_initialYearlyTreasuryReward);
                 }
             }
         }
 
-        return currrentTreasuryBlockReward;
+        return treasuryPeriodReward;
     }
 
     /**
-     * @dev Get Initial Quarterly Block Reward
+     * @dev Get Quarterly Period Reward
      */
-    function _getInitialQuarterlyBlockReward(uint256 currentBlockNum)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 currrentQuarterlyBlockReward = 0;
+    function _getQuarterlyPeriodReward(
+        uint256 startBlockNum,
+        uint256 endBlockNum
+    ) internal view returns (uint256) {
+        if (startBlockNum > endBlockNum) {
+            return 0;
+        }
 
-        if (currentBlockNum > _initialBlockNum) {
-            // if Current Block Number is in Quarterly First Reward Period
-            if (currentBlockNum <= _quarterlyFirstRewardEndedBlockNum) {
-                currrentQuarterlyBlockReward = _initialFirstQuarterlyReward;
-            } else {
-                // if Current Block Number is in Yearly Reward Period but should pass Weekly Reward Period
-                if (currentBlockNum <= _yearlyRewardEndedBlockNum) {
-                    currrentQuarterlyBlockReward = _initialYearlyQuarterlyReward;
+        uint256 quarterlyPeriodReward = 0;
+
+        // If Period is in First Reward Period
+        if (endBlockNum < _quarterlyFirstRewardEndedBlockNum) {
+            quarterlyPeriodReward = endBlockNum.sub(startBlockNum).mul(
+                _initialFirstQuarterlyReward
+            );
+        } else {
+            if (
+                startBlockNum < _quarterlyFirstRewardEndedBlockNum &&
+                endBlockNum < _yearlyRewardEndedBlockNum
+            ) {
+                quarterlyPeriodReward = _quarterlyFirstRewardEndedBlockNum
+                    .sub(startBlockNum)
+                    .mul(_initialFirstQuarterlyReward);
+                quarterlyPeriodReward = endBlockNum
+                    .sub(_quarterlyFirstRewardEndedBlockNum)
+                    .mul(_initialYearlyQuarterlyReward)
+                    .add(quarterlyPeriodReward);
+            }
+            if (
+                startBlockNum > _quarterlyFirstRewardEndedBlockNum &&
+                startBlockNum < _yearlyRewardEndedBlockNum
+            ) {
+                if (endBlockNum < _yearlyRewardEndedBlockNum) {
+                    quarterlyPeriodReward = endBlockNum.sub(startBlockNum).mul(
+                        _initialYearlyQuarterlyReward
+                    );
+                } else {
+                    quarterlyPeriodReward = _yearlyRewardEndedBlockNum
+                        .sub(startBlockNum)
+                        .mul(_initialYearlyQuarterlyReward);
                 }
             }
         }
 
-        return currrentQuarterlyBlockReward;
-    }
-
-    /**
-     * @dev API to Get Treasury Block Reward
-     */
-    function getTreasuryBlockReward(uint256 currentBlockNum)
-        external
-        view
-        returns (uint256)
-    {
-        uint256 blockTreasuryReward = _blockTreasuryRewards[currentBlockNum];
-        if (blockTreasuryReward == 0) {
-            blockTreasuryReward = _getInitialTreasuryBlockReward(
-                currentBlockNum
-            );
-        }
-
-        return blockTreasuryReward;
-    }
-
-    /**
-     * @dev API to Get  Quarterly Block Reward
-     */
-    function getQuarterlyBlockReward(uint256 currentBlockNum)
-        external
-        view
-        returns (uint256)
-    {
-        uint256 blockQuarterlyReward = _blockQuarterlyRewards[currentBlockNum];
-        if (blockQuarterlyReward == 0) {
-            blockQuarterlyReward = _getInitialQuarterlyBlockReward(
-                currentBlockNum
-            );
-        }
-
-        return blockQuarterlyReward;
-    }
-
-    /**
-     * @dev get last total staked block info
-     */
-    function _getLastTotalStakedBlockNumber() internal view returns (uint256) {
-        uint256 totalStakedListLength = _totalStakedList.length;
-
-        require(
-            totalStakedListLength > 0,
-            "To get last block info, the length should be more than zero."
-        );
-
-        return _totalStakedList[totalStakedListLength - 1].blockNum;
-    }
-
-    /**
-     * @dev update last total staked block info
-     */
-    function _updateLastTotalStakedBlockInfo(uint256 newAmount) internal {
-        uint256 totalStakedListLength = _totalStakedList.length;
-
-        require(
-            totalStakedListLength > 0,
-            "To update last block info, the length should be more than zero."
-        );
-
-        _totalStakedList[totalStakedListLength - 1].stakedAmount = newAmount;
-    }
-
-    /**
-     * @dev get last user's staked block info
-     */
-    function _getLastUserStakedBlockNumber(address stakerAddress)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 userStakedListLength = _stakerInfoList[stakerAddress].length;
-
-        require(
-            userStakedListLength > 0,
-            "To get last block info, the length should be more than zero."
-        );
-
-        return
-            _stakerInfoList[stakerAddress][userStakedListLength - 1].blockNum;
-    }
-
-    /**
-     * @dev get last user's staked block info
-     */
-    function _updateLastUserStakedBlockInfo(
-        address stakerAddress,
-        uint256 newAmount
-    ) internal {
-        uint256 userStakedListLength = _stakerInfoList[stakerAddress].length;
-
-        require(
-            userStakedListLength > 0,
-            "To update last block info, the length should be more than zero."
-        );
-
-        _stakerInfoList[stakerAddress][userStakedListLength - 1]
-            .stakedAmount = newAmount;
+        return quarterlyPeriodReward;
     }
 
     /**
@@ -864,7 +744,6 @@ contract YZYVault is Context, Ownable {
      * Note Call by only YZY token contract
      */
     function addEraReward(uint256 amount_) external onlyYzy returns (bool) {
-        uint256 currentBlockNum = block.number;
         uint256 treasuryDevFee = uint256(_treasuryFee).add(uint256(_devFee));
         uint256 treasuryRewardAmount = amount_.mul(treasuryDevFee).div(10000);
         uint256 quarterlyRewardAmount = amount_.sub(treasuryRewardAmount);
@@ -879,32 +758,10 @@ contract YZYVault is Context, Ownable {
         );
 
         // Update Treasury Rewards
-        if (_blockTreasuryRewards[currentBlockNum] == 0) {
-            uint256 initialBlockReward =
-                _getInitialTreasuryBlockReward(currentBlockNum);
-            _blockTreasuryRewards[currentBlockNum] = initialBlockReward.add(
-                treasuryRewardAmount
-            );
-        } else {
-            _blockTreasuryRewards[currentBlockNum] = _blockTreasuryRewards[
-                currentBlockNum
-            ]
-                .add(treasuryRewardAmount);
-        }
+        _lastTreasuryReward = _lastTreasuryReward.add(treasuryRewardAmount);
 
         // Update Quarterly Rewards
-        if (_blockQuarterlyRewards[currentBlockNum] == 0) {
-            uint256 initialBlockReward =
-                _getInitialQuarterlyBlockReward(currentBlockNum);
-            _blockQuarterlyRewards[currentBlockNum] = initialBlockReward.add(
-                quarterlyRewardAmount
-            );
-        } else {
-            _blockQuarterlyRewards[currentBlockNum] = _blockQuarterlyRewards[
-                currentBlockNum
-            ]
-                .add(quarterlyRewardAmount);
-        }
+        _lastQuarterlyReward = _lastQuarterlyReward.add(quarterlyRewardAmount);
 
         return true;
     }
@@ -1024,20 +881,6 @@ contract YZYVault is Context, Ownable {
      */
     function _updateStakeInfo(uint256 newAmount, uint256 lockTime) internal {
         uint256 currentBlockNum = block.number;
-        // Increase the total staked amount
-        _totalStakedAmount = _totalStakedAmount.add(newAmount);
-
-        // Update Total Block Stacked Info
-        uint256 lastTotalStakedBlockNum = _getLastTotalStakedBlockNumber();
-        if (lastTotalStakedBlockNum == currentBlockNum) {
-            // If Current Block Number is Last Staked Block Number, Update It
-            _updateLastTotalStakedBlockInfo(_totalStakedAmount);
-        } else {
-            // If New, Add New Block Staked Info
-            _totalStakedList.push(
-                BlockStakedInfo(currentBlockNum, _totalStakedAmount)
-            );
-        }
 
         // Update Staker's Locked Time
         if (_stakers[_msgSender()].lockedTo == 0) {
@@ -1046,7 +889,7 @@ contract YZYVault is Context, Ownable {
         }
 
         // Update Staker's Initial Info
-        if (_stakers[_msgSender()].totalStakedAmount == 0) {
+        if (_stakers[_msgSender()].stakedAmount == 0) {
             // If User Stakes at first time
             if (_stakers[_msgSender()].lastUnStakedBlockNum == 0) {
                 // Initialize Staker's Treasury Reward Block Number
@@ -1057,7 +900,7 @@ contract YZYVault is Context, Ownable {
                     .lastQuarterlyRewardBlockNum = _initialBlockNum;
                 // Initialize Staker's Block Staked Info
                 _stakerInfoList[_msgSender()].push(
-                    BlockStakedInfo(_initialBlockNum, 0)
+                    BlockStakedInfo(_initialBlockNum, 0, _totalStakedAmount)
                 );
             } else {
                 // If User Restakes
@@ -1065,34 +908,37 @@ contract YZYVault is Context, Ownable {
                 _stakerInfoList[_msgSender()].push(
                     BlockStakedInfo(
                         _stakers[_msgSender()].lastUnStakedBlockNum,
-                        0
+                        0,
+                        _totalStakedAmount
                     )
                 );
             }
         }
 
+        // Increase the total staked amount
+        _totalStakedAmount = _totalStakedAmount.add(newAmount);
+
         // Increase staked amount of the staker
-        _stakers[_msgSender()].totalStakedAmount = _stakers[_msgSender()]
-            .totalStakedAmount
+        _stakers[_msgSender()].stakedAmount = _stakers[_msgSender()]
+            .stakedAmount
             .add(newAmount);
 
         // Update Staker Block Stacked Info
-        uint256 lastStakerBlockNumber =
-            _getLastUserStakedBlockNumber(_msgSender());
-        if (lastStakerBlockNumber == currentBlockNum) {
-            // If Current Block Number is Last Staked Block Number, Update It
-            _updateLastUserStakedBlockInfo(
-                _msgSender(),
-                _stakers[_msgSender()].totalStakedAmount
-            );
-        } else {
-            // If New, Add New Block Staked Info
-            _stakerInfoList[_msgSender()].push(
-                BlockStakedInfo(
-                    currentBlockNum,
-                    _stakers[_msgSender()].totalStakedAmount
-                )
-            );
+        _stakerInfoList[_msgSender()].push(
+            BlockStakedInfo(
+                currentBlockNum,
+                _totalStakedAmount,
+                _stakers[_msgSender()].stakedAmount
+            )
+        );
+
+        // Update Last Block Number
+        for (uint256 i = 0; i < _stakerList.length; i++) {
+            uint256 length = _stakerInfoList[_stakerList[i]].length;
+            if (length > 1) {
+                _stakerInfoList[_stakerList[i]][length - 1]
+                    .totalStakedAmount = _totalStakedAmount;
+            }
         }
     }
 
@@ -1142,7 +988,7 @@ contract YZYVault is Context, Ownable {
      */
     function unstake() external onlyUnlocked {
         require(!_isContract(_msgSender()), "Could not be a contract");
-        uint256 amount = _stakers[_msgSender()].totalStakedAmount;
+        uint256 amount = _stakers[_msgSender()].stakedAmount;
 
         require(amount > 0, "No running stake");
         require(
@@ -1166,11 +1012,9 @@ contract YZYVault is Context, Ownable {
 
         // Decrease The Total Staked Amount
         _totalStakedAmount = _totalStakedAmount.sub(amount);
-        // Update Total Staked Amount Info
-        _updateLastTotalStakedBlockInfo(_totalStakedAmount);
 
         // Update Staker's Infos
-        _stakers[_msgSender()].totalStakedAmount = 0;
+        _stakers[_msgSender()].stakedAmount = 0;
         _stakers[_msgSender()].lastUnStakedBlockNum = block.number;
         // Pop All Staker's Block Infos
         uint256 stakerBlockInfoLength = _stakerInfoList[_msgSender()].length;
@@ -1188,95 +1032,207 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev To Get Total Staked Amount With Block Number
+     * @dev Get Treasury Reward
      */
-    function _getTotalStakedAmountWithBlockNumber(uint256 currentBlockNum)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 totalStakedAmount = 0;
-        uint256 totalStakedLength = _totalStakedList.length;
-        uint256 j = 0;
-
-        if (totalStakedLength < 2) {
-            return 0;
-        }
-
-        while (j < totalStakedLength - 1) {
-            if (
-                _totalStakedList[j].blockNum >= currentBlockNum &&
-                _totalStakedList[j + 1].blockNum < currentBlockNum
-            ) {
-                totalStakedAmount = _totalStakedList[j].stakedAmount;
-                break;
-            }
-
-            j = j.add(1);
-        }
-
-        if (totalStakedAmount == 0 && j == totalStakedLength - 1) {
-            totalStakedAmount = _totalStakedAmount;
-        }
-
-        return totalStakedAmount;
-    }
-
-    /**
-     * @dev API To Get Total Staked Amount With Block Number
-     */
-    function getTotalStakedAmountWithBlockNumber(uint256 currentBlockNum)
-        external
-        view
-        returns (uint256)
-    {
-        return _getTotalStakedAmountWithBlockNumber(currentBlockNum);
-    }
-
-    /**
-     * @dev To Get User Total Staked Amount With Block Number
-     */
-    function _getUserStakedAmountWithBlockNumber(
-        address stakedAddress,
-        uint256 currentBlockNum
+    function _getTreasuryReward(
+        address account_,
+        uint256 from,
+        uint256 to,
+        uint256 length
     ) internal view returns (uint256) {
-        uint256 userStakedAmount = 0;
-        uint256 userStakedLength = _stakerInfoList[stakedAddress].length;
-        uint256 j = 0;
+        uint256 treasuryReward = 0;
 
-        if (userStakedLength < 2) {
-            return 0;
+        if (from >= to) {
+            return treasuryReward;
         }
 
-        while (j < userStakedLength - 1) {
-            if (
-                _stakerInfoList[stakedAddress][j].blockNum >= currentBlockNum &&
-                _stakerInfoList[stakedAddress][j + 1].blockNum < currentBlockNum
-            ) {
-                userStakedAmount = _stakerInfoList[stakedAddress][j]
-                    .stakedAmount;
-                break;
+        for (uint256 i = 1; i < length; i++) {
+            if (_stakerInfoList[account_][i - 1].totalStakedAmount > 0) {
+                if (
+                    _stakerInfoList[account_][i - 1].blockNum <= from &&
+                    _stakerInfoList[account_][i].blockNum > from
+                ) {
+                    uint256 toBlockNumber =
+                        _stakerInfoList[account_][i].blockNum;
+                    if (toBlockNumber > to) {
+                        toBlockNumber = to;
+                    }
+                    treasuryReward = treasuryReward.add(
+                        _getTreasuryPeriodReward(from, toBlockNumber)
+                            .mul(
+                            _stakerInfoList[account_][i - 1]
+                                .userStakedAmount
+                        )
+                            .div(
+                            _stakerInfoList[account_][i - 1].totalStakedAmount
+                        )
+                    );
+                    continue;
+                }
+                if (
+                    _stakerInfoList[account_][i - 1].blockNum > from &&
+                    _stakerInfoList[account_][i].blockNum < to
+                ) {
+                    treasuryReward = treasuryReward.add(
+                        _getTreasuryPeriodReward(
+                            _stakerInfoList[account_][i - 1]
+                                .blockNum,
+                            _stakerInfoList[account_][i]
+                                .blockNum
+                        )
+                            .mul(
+                            _stakerInfoList[account_][i - 1]
+                                .userStakedAmount
+                        )
+                            .div(
+                            _stakerInfoList[account_][i - 1].totalStakedAmount
+                        )
+                    );
+                    continue;
+                }
+                if (
+                    _stakerInfoList[account_][i - 1].blockNum <= to &&
+                    _stakerInfoList[account_][i].blockNum > to
+                ) {
+                    treasuryReward = treasuryReward.add(
+                        _getTreasuryPeriodReward(
+                            _stakerInfoList[account_][i - 1]
+                                .blockNum,
+                            to
+                        )
+                            .mul(
+                            _stakerInfoList[account_][i - 1]
+                                .userStakedAmount
+                        )
+                            .div(
+                            _stakerInfoList[account_][i - 1].totalStakedAmount
+                        )
+                    );
+                }
             }
-
-            j = j.add(1);
         }
 
-        if (userStakedAmount == 0 && j == userStakedLength - 1) {
-            userStakedAmount = _stakers[stakedAddress].totalStakedAmount;
+        if (
+            _stakerInfoList[account_][length - 1].totalStakedAmount > 0 &&
+            _stakerInfoList[account_][length - 1].blockNum <= to
+        ) {
+            uint256 startBlockNum =
+                _stakerInfoList[account_][length - 1].blockNum;
+            if (startBlockNum < from) {
+                startBlockNum = from;
+            }
+            treasuryReward = treasuryReward.add(
+                _getTreasuryPeriodReward(startBlockNum, to)
+                    .mul(_stakerInfoList[account_][length - 1].userStakedAmount)
+                    .div(
+                    _stakerInfoList[account_][length - 1].totalStakedAmount
+                )
+            );
         }
 
-        return userStakedAmount;
+        return treasuryReward;
     }
 
     /**
-     * @dev To Get User Total Staked Amount With Block Number
+     * @dev Get Quarterly Reward
      */
-    function getUserStakedAmountWithBlockNumber(
-        address stakedAddress,
-        uint256 currentBlockNum
-    ) external view returns (uint256) {
-        return
-            _getUserStakedAmountWithBlockNumber(stakedAddress, currentBlockNum);
+    function _getQuarterlyReward(
+        address account_,
+        uint256 from,
+        uint256 to,
+        uint256 length
+    ) internal view returns (uint256) {
+        uint256 quarterlyReward = 0;
+
+        if (from >= to) {
+            return quarterlyReward;
+        }
+
+        for (uint256 i = 1; i < length; i++) {
+            if (_stakerInfoList[account_][i - 1].totalStakedAmount > 0) {
+                if (
+                    _stakerInfoList[account_][i - 1].blockNum <= from &&
+                    _stakerInfoList[account_][i].blockNum > from
+                ) {
+                    uint256 toBlockNumber =
+                        _stakerInfoList[account_][i].blockNum;
+                    if (toBlockNumber > to) {
+                        toBlockNumber = to;
+                    }
+                    quarterlyReward = quarterlyReward.add(
+                        _getQuarterlyPeriodReward(from, toBlockNumber)
+                            .mul(
+                            _stakerInfoList[account_][i - 1]
+                                .userStakedAmount
+                        )
+                            .div(
+                            _stakerInfoList[account_][i - 1].totalStakedAmount
+                        )
+                    );
+                    continue;
+                }
+                if (
+                    _stakerInfoList[account_][i - 1].blockNum > from &&
+                    _stakerInfoList[account_][i].blockNum < to
+                ) {
+                    quarterlyReward = quarterlyReward.add(
+                        _getQuarterlyPeriodReward(
+                            _stakerInfoList[account_][i - 1]
+                                .blockNum,
+                            _stakerInfoList[account_][i]
+                                .blockNum
+                        )
+                            .mul(
+                            _stakerInfoList[account_][i - 1]
+                                .userStakedAmount
+                        )
+                            .div(
+                            _stakerInfoList[account_][i - 1].totalStakedAmount
+                        )
+                    );
+                    continue;
+                }
+                if (
+                    _stakerInfoList[account_][i - 1].blockNum <= to &&
+                    _stakerInfoList[account_][i].blockNum > to
+                ) {
+                    quarterlyReward = quarterlyReward.add(
+                        _getQuarterlyPeriodReward(
+                            _stakerInfoList[account_][i - 1]
+                                .blockNum,
+                            to
+                        )
+                            .mul(
+                            _stakerInfoList[account_][i - 1]
+                                .userStakedAmount
+                        )
+                            .div(
+                            _stakerInfoList[account_][i - 1].totalStakedAmount
+                        )
+                    );
+                }
+            }
+        }
+
+        if (
+            _stakerInfoList[account_][length - 1].totalStakedAmount > 0 &&
+            _stakerInfoList[account_][length - 1].blockNum <= to
+        ) {
+            uint256 startBlockNum =
+                _stakerInfoList[account_][length - 1].blockNum;
+            if (startBlockNum < from) {
+                startBlockNum = from;
+            }
+            quarterlyReward = quarterlyReward.add(
+                _getQuarterlyPeriodReward(startBlockNum, to)
+                    .mul(_stakerInfoList[account_][length - 1].userStakedAmount)
+                    .div(
+                    _stakerInfoList[account_][length - 1].totalStakedAmount
+                )
+            );
+        }
+
+        return quarterlyReward;
     }
 
     /**
@@ -1304,32 +1260,12 @@ contract YZYVault is Context, Ownable {
             return availableTreasuryReward;
         }
 
-        // For All Available Reward Blocks
-        for (
-            uint256 i = _stakers[account_].lastTreasuryRewardBlockNum;
-            i < lastAvailableTreasuryRewardBlockNum;
-            i++
-        ) {
-            // Check Current Block Has Available Reward
-            uint256 blockTreasuryReward = _blockTreasuryRewards[i];
-            if (blockTreasuryReward == 0) {
-                blockTreasuryReward = _getInitialTreasuryBlockReward(i);
-            }
-            // Get Total Staked Amount With Blocknumber
-            uint256 _totalStakedAmountWithBlockNumber =
-                _getTotalStakedAmountWithBlockNumber(i);
-            // Get User Staked Amount with Blocknumber
-            uint256 _userStakedAmountWithBlockNumber =
-                _getUserStakedAmountWithBlockNumber(account_, i);
-
-            if (_totalStakedAmountWithBlockNumber > 0) {
-                availableTreasuryReward = blockTreasuryReward
-                    .mul(_userStakedAmountWithBlockNumber)
-                    .div(_totalStakedAmountWithBlockNumber)
-                    .add(availableTreasuryReward);
-            }
-        }
-
+        availableTreasuryReward = _getTreasuryReward(
+            account_,
+            _stakers[account_].lastTreasuryRewardBlockNum,
+            lastAvailableTreasuryRewardBlockNum,
+            stakerInfoLength
+        );
         return availableTreasuryReward;
     }
 
@@ -1366,31 +1302,12 @@ contract YZYVault is Context, Ownable {
                 .lastTreasuryRewardBlockNum;
         }
 
-        // For All Pending Reward Blocks
-        for (
-            uint256 i = lastPendingTreasuryRewardBlockNum;
-            i < currentBlockNum;
-            i++
-        ) {
-            // Check Current Block Has Pending Reward
-            uint256 blockTreasuryReward = _blockTreasuryRewards[i];
-            if (blockTreasuryReward == 0) {
-                blockTreasuryReward = _getInitialTreasuryBlockReward(i);
-            }
-            // Get Total Staked Amount With Blocknumber
-            uint256 _totalStakedAmountWithBlockNumber =
-                _getTotalStakedAmountWithBlockNumber(i);
-            // Get User Staked Amount with Blocknumber
-            uint256 _userStakedAmountWithBlockNumber =
-                _getUserStakedAmountWithBlockNumber(account_, i);
-
-            if (_totalStakedAmountWithBlockNumber > 0) {
-                pendingTreasuryReward = blockTreasuryReward
-                    .mul(_userStakedAmountWithBlockNumber)
-                    .div(_totalStakedAmountWithBlockNumber)
-                    .add(pendingTreasuryReward);
-            }
-        }
+        pendingTreasuryReward = _getTreasuryReward(
+            account_,
+            lastPendingTreasuryRewardBlockNum,
+            currentBlockNum,
+            stakerInfoLength
+        );
 
         return pendingTreasuryReward;
     }
@@ -1420,31 +1337,12 @@ contract YZYVault is Context, Ownable {
             return availableQuarterlyReward;
         }
 
-        // For All Available Reward Blocks
-        for (
-            uint256 i = _stakers[account_].lastQuarterlyRewardBlockNum;
-            i < lastAvailableQuarterlyRewardBlockNum;
-            i++
-        ) {
-            // Check Current Block Has Available Reward
-            uint256 blockQuarterlyReward = _blockQuarterlyRewards[i];
-            if (blockQuarterlyReward == 0) {
-                blockQuarterlyReward = _getInitialQuarterlyBlockReward(i);
-            }
-            // Get Total Staked Amount With Blocknumber
-            uint256 _totalStakedAmountWithBlockNumber =
-                _getTotalStakedAmountWithBlockNumber(i);
-            // Get User Staked Amount with Blocknumber
-            uint256 _userStakedAmountWithBlockNumber =
-                _getUserStakedAmountWithBlockNumber(account_, i);
-
-            if (_totalStakedAmountWithBlockNumber > 0) {
-                availableQuarterlyReward = blockQuarterlyReward
-                    .mul(_userStakedAmountWithBlockNumber)
-                    .div(_totalStakedAmountWithBlockNumber)
-                    .add(availableQuarterlyReward);
-            }
-        }
+        availableQuarterlyReward = _getQuarterlyReward(
+            account_,
+            _stakers[account_].lastQuarterlyRewardBlockNum,
+            lastAvailableQuarterlyRewardBlockNum,
+            stakerInfoLength
+        );
 
         return availableQuarterlyReward;
     }
@@ -1482,32 +1380,12 @@ contract YZYVault is Context, Ownable {
                 .lastQuarterlyRewardBlockNum;
         }
 
-        // For All Pending Reward Blocks
-        for (
-            uint256 i = lastPendingQuarterlyRewardBlockNum;
-            i < currentBlockNum;
-            i++
-        ) {
-            // Check Current Block Has Available Reward
-            uint256 blockQuarterlyReward = _blockQuarterlyRewards[i];
-            if (blockQuarterlyReward == 0) {
-                blockQuarterlyReward = _getInitialQuarterlyBlockReward(i);
-            }
-            // Get Total Staked Amount With Blocknumber
-            uint256 _totalStakedAmountWithBlockNumber =
-                _getTotalStakedAmountWithBlockNumber(i);
-            // Get User Staked Amount with Blocknumber
-            uint256 _userStakedAmountWithBlockNumber =
-                _getUserStakedAmountWithBlockNumber(account_, i);
-
-            if (_totalStakedAmountWithBlockNumber > 0) {
-                pendingQuarterlyReward = blockQuarterlyReward
-                    .mul(_userStakedAmountWithBlockNumber)
-                    .div(_totalStakedAmountWithBlockNumber)
-                    .add(pendingQuarterlyReward);
-            }
-        }
-
+        pendingQuarterlyReward = _getQuarterlyReward(
+            account_,
+            lastPendingQuarterlyRewardBlockNum,
+            currentBlockNum,
+            stakerInfoLength
+        );
         return pendingQuarterlyReward;
     }
 
@@ -1647,7 +1525,7 @@ contract YZYVault is Context, Ownable {
         view
         returns (uint256)
     {
-        return _stakers[account_].totalStakedAmount;
+        return _stakers[account_].stakedAmount;
     }
 
     /**
@@ -1657,13 +1535,13 @@ contract YZYVault is Context, Ownable {
         require(account_ != address(0), "Invalid address");
 
         uint256 rank = 1;
-        uint256 userStakedAmount = _stakers[account_].totalStakedAmount;
+        uint256 userStakedAmount = _stakers[account_].stakedAmount;
 
         for (uint256 i = 0; i < _stakerList.length; i++) {
             address staker = _stakerList[i];
             if (
                 staker != account_ &&
-                userStakedAmount < _stakers[staker].totalStakedAmount
+                userStakedAmount < _stakers[staker].stakedAmount
             ) rank = rank.add(1);
         }
         return rank;

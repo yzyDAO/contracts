@@ -996,19 +996,11 @@ contract YZYVault is Context, Ownable {
             "User can't unstake more than total staked amount."
         );
 
-        // Check Staker's Treasurey Reward
-        uint256 treasuryAvailableReward =
-            getTreasuryAvailableReward(_msgSender());
-        if (treasuryAvailableReward > 0) {
-            _withdrawTreasuryReward(treasuryAvailableReward);
-        }
+        // Withdraw Treasury TotalReward
+        withdrawTreasuryTotalReward();
 
-        // Check Staker's Quarterly Reward
-        uint256 quarterlyAvailableReward =
-            getQuarterlyAvailableReward(_msgSender());
-        if (quarterlyAvailableReward > 0) {
-            _withdrawQuarterlyReward(quarterlyAvailableReward);
-        }
+        // Withdraw Quarterly TotalReward
+        withdrawQuarterlyTotalReward();
 
         // Decrease The Total Staked Amount
         _totalStakedAmount = _totalStakedAmount.sub(amount);
@@ -1435,7 +1427,7 @@ contract YZYVault is Context, Ownable {
      * @dev API to withdraw treasury total(available + pending) rewards to staker's wallet
      * At that time, will burn 20% of treasury pending reward
      */
-    function withdrawTreasuryTotalReward() external returns (bool) {
+    function withdrawTreasuryTotalReward() public returns (bool) {
         // Get Treasury Available Reward
         uint256 treasuryAvailableReward =
             getTreasuryAvailableReward(_msgSender());
@@ -1473,7 +1465,7 @@ contract YZYVault is Context, Ownable {
      * @dev API to withdraw quarterly total(available +pending) rewards to staker's wallet
      * At that time, will burn 20% of quarterly pending reward
      */
-    function withdrawQuarterlyTotalReward() external returns (bool) {
+    function withdrawQuarterlyTotalReward() public returns (bool) {
         // Get Quarterly Available Reward
         uint256 quarterlyAvailableReward =
             getQuarterlyAvailableReward(_msgSender());

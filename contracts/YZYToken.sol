@@ -59,15 +59,12 @@ contract YZYToken is Context, IERC20, Ownable {
      * All three of these values are immutable: they can only be set once during
      * construction.
      */
-    constructor(
-        address uniswap,
-        address farming,
-        address presale
-    ) {
-        _name = "YZY Vault";
+    constructor(address uniswap, address farming, address presale, address vault) {
+        _name = "YZY DAO";
         _symbol = "YZY";
         _decimals = 18;
 
+        _vault = vault;
         // set initial transfer fee as 2%
         // It is allow 2 digits under point
         _transferFee = 200;

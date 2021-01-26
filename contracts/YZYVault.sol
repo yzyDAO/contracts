@@ -14,36 +14,37 @@ contract YZYVault is Context, Ownable {
     using SafeMath for uint256;
 
     // States
-    address private _uniswapV2Pair;
-    address private _yzyAddress;
-    address private _yfiTokenAddress;
-    address private _wbtcTokenAddress;
-    address private _wethTokenAddress;
+    address public _uniswapV2Pair;
+    address public _usdcETHV2Pair;
+    address public _yzyAddress;
+    address public _yfiTokenAddress;
+    address public _wbtcTokenAddress;
+    address public _wethTokenAddress;
 
-    uint16 private _treasuryFee;
-    uint16 private _lotteryFee;
-    uint16 private _quarterlyFee;
-    uint16 private _buyingYFITokenFee;
-    uint16 private _buyingWBTCTokenFee;
-    uint16 private _buyingWETHTokenFee;
-    uint16 private _burnFee;
+    uint16 public _treasuryFee;
+    uint16 public _lotteryFee;
+    uint16 public _quarterlyFee;
+    uint16 public _buyingYFITokenFee;
+    uint16 public _buyingWBTCTokenFee;
+    uint16 public _buyingWETHTokenFee;
+    uint16 public _burnFee;
 
     IUniswapV2Router02 private _uniswapV2Router;
 
     // Period of reward distribution to stakers
     // It is `1 days` by default and could be changed
     // later only by Governance
-    uint256 private _treasuryRewardPeriod;
-    uint256 private _quarterlyRewardPeriod;
-    uint256 private _maxLockPeriod;
-    uint256 private _minLockPeriod;
-    uint256 private _minDepositETHAmount;
-    bool private _enabledLock;
+    uint256 public _treasuryRewardPeriod;
+    uint256 public _quarterlyRewardPeriod;
+    uint256 public _maxLockPeriod;
+    uint256 public _minLockPeriod;
+    uint256 public _minDepositETHAmount;
+    bool public _enabledLock;
 
     // save the timestamp for every period's reward
-    uint256 private _contractStartTime;
-    uint256 private _totalStakedAmount;
-    address[] private _stakerList;
+    uint256 public _contractStartTime;
+    uint256 public _totalStakedAmount;
+    address[] public _stakerList;
 
     // variables for block rewards
     uint256 private _initialBlockNum;
@@ -61,7 +62,7 @@ contract YZYVault is Context, Ownable {
     uint256 private _lastTreasuryReward;
     uint256 private _lastQuarterlyReward;
     uint256 private _lotteryAmount;
-    uint256 private _lotteryLimit;
+    uint256 public _lotteryLimit;
 
     struct StakerInfo {
         uint256 stakedAmount;
@@ -84,7 +85,7 @@ contract YZYVault is Context, Ownable {
     event Staked(address indexed account, uint256 amount);
     event LPStaked(address indexed account, uint256 amount);
     event Unstaked(address indexed account, uint256 amount);
-    event EnabledLock(address indexed governance);
+    event ChangedEnabledLock(address indexed governance);
     event DisabledLock(address indexed governance);
     event ChangedMaximumLockPeriod(address indexed governance, uint256 value);
     event ChangedMinimumLockPeriod(address indexed governance, uint256 value);
@@ -109,7 +110,7 @@ contract YZYVault is Context, Ownable {
     event SwapAndLiquifyForYZY(address indexed msgSender, uint256 totAmount, uint256 ethAmount, uint256 yzyAmount);
     event ChangedLotteryFee(address indexed governance, uint16 value);
     event ChangeLotteryLimit(address indexed msgSender, uint256 lotteryLimit);
-
+    event ChangedYUsdcETHV2PairAddress(address indexed msgSender, address usdcETHV2Pair);
     // Modifier
 
     /**
@@ -125,7 +126,7 @@ contract YZYVault is Context, Ownable {
 
     modifier onlyUnlocked() {
         require(
-            !isEnabledLock() ||
+            !_enabledLock ||
                 (_stakers[_msgSender()].lockedTo > 0 &&
                     block.timestamp >= _stakers[_msgSender()].lockedTo),
             "Staking pool is locked"
@@ -206,20 +207,15 @@ contract YZYVault is Context, Ownable {
         address yzyAddress_,
         address yfiTokenAddress_,
         address wbtcTokenAddress_,
-        address wethTokenAddress_
+        address wethTokenAddress_,
+        address usdtETHV2Pair_
     ) external onlyGovernance {
         _uniswapV2Pair = uniswapV2Pair_;
         _yzyAddress = yzyAddress_;
         _yfiTokenAddress = yfiTokenAddress_;
         _wbtcTokenAddress = wbtcTokenAddress_;
         _wethTokenAddress = wethTokenAddress_;
-    }
-
-    /**
-     * @dev Return minium Deposit ETH Amount
-     */
-    function minimumDepositETHAmount() external view returns (uint256) {
-        return _minDepositETHAmount;
+        _usdcETHV2Pair = usdtETHV2Pair_;
     }
 
     /**
@@ -231,13 +227,6 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return address of YFI Token contract
-     */
-    function yfiTokenAddress() external view returns (address) {
-        return _yfiTokenAddress;
-    }
-
-    /**
      * @dev Change YFI Token contract address. Call by only Governance.
      */
     function changeYfiTokenAddress(address yfiAddress_) external onlyGovernance {
@@ -246,10 +235,11 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return address of WBTC Token contract
+     * @dev Change usdc-eth pair contract address. Call by only Governance.
      */
-    function wbtcTokenAddress() external view returns (address) {
-        return _wbtcTokenAddress;
+    function changeUsdcETHV2PairAddress(address address_) external onlyGovernance {
+        _usdcETHV2Pair = address_;
+        emit ChangedYUsdcETHV2PairAddress(governance(), address_);
     }
 
     /**
@@ -261,25 +251,11 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return address of WETH Token contract
-     */
-    function wethTokenAddress() external view returns (address) {
-        return _wethTokenAddress;
-    }
-
-    /**
      * @dev Change WETH Token address. Call by only Governance.
      */
     function changeWethTokenAddress(address wethAddress_) external onlyGovernance {
         _wethTokenAddress = wethAddress_;
         emit ChangedWethTokenAddress(governance(), wethAddress_);
-    }
-
-    /**
-     * @dev Return value of treasury reward period
-     */
-    function treasuryRewardPeriod() external view returns (uint256) {
-        return _treasuryRewardPeriod;
     }
 
     /**
@@ -291,13 +267,6 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return value of quarterly reward period
-     */
-    function quarterlyRewardPeriod() external view returns (uint256) {
-        return _quarterlyRewardPeriod;
-    }
-
-    /**
      * @dev Change value of quarterly reward period. Call by only Governance.
      */
     function changeQuarterlyRewardPeriod(uint256 quarterlyRewardPeriod_) external onlyGovernance {
@@ -306,40 +275,11 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return contract started time
-     */
-    function contractStartTime() external view returns (uint256) {
-        return _contractStartTime;
-    }
-
-    /**
      * @dev Enable lock functionality. Call by only Governance.
      */
-    function enableLock() external onlyGovernance {
-        _enabledLock = true;
-        emit EnabledLock(governance());
-    }
-
-    /**
-     * @dev Disable lock functionality. Call by only Governance.
-     */
-    function disableLock() external onlyGovernance {
-        _enabledLock = false;
-        emit DisabledLock(governance());
-    }
-
-    /**
-     * @dev Disable lock functionality. Call by only Governance.
-     */
-    function isEnabledLock() public view returns (bool) {
-        return _enabledLock;
-    }
-
-    /**
-     * @dev Return maximum lock period.
-     */
-    function maximumLockPeriod() external view returns (uint256) {
-        return _maxLockPeriod;
+    function setLock(bool lock_) external onlyGovernance {
+        _enabledLock = lock_;
+        emit ChangedEnabledLock(governance());
     }
 
     /**
@@ -351,25 +291,11 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return minimum lock period.
-     */
-    function minimumLockPeriod() external view returns (uint256) {
-        return _minLockPeriod;
-    }
-
-    /**
      * @dev Change minimum lock period. Call by only Governance.
      */
     function changedMinimumLockPeriod(uint256 minLockPeriod_) external onlyGovernance {
         _minLockPeriod = minLockPeriod_;
         emit ChangedMinimumLockPeriod(governance(), _minLockPeriod);
-    }
-
-    /**
-     * @dev Return address of YZY-ETH Uniswap V2 pair
-     */
-    function uniswapV2Pair() external view returns (address) {
-        return _uniswapV2Pair;
     }
 
     /**
@@ -381,13 +307,6 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return address of Uniswap V2Router
-     */
-    function uniswapV2Router() external view returns (address) {
-        return address(_uniswapV2Router);
-    }
-
-    /**
      * @dev Change address of Uniswap V2Router. Call by only Governance.
      */
     function changeUniswapV2Router(address uniswapV2Router_) external onlyGovernance {
@@ -396,25 +315,11 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return address of YZY Token contract
-     */
-    function yzyAddress() external view returns (address) {
-        return _yzyAddress;
-    }
-
-    /**
      * @dev Change YZY Token contract address. Call by only Governance.
      */
     function changeYzyAddress(address yzyAddress_) external onlyGovernance {
         _yzyAddress = yzyAddress_;
         emit ChangedYzyAddress(governance(), yzyAddress_);
-    }
-
-    /**
-     * @dev Return Treasury fee
-     */
-    function treasuryFee() external view returns (uint16) {
-        return _treasuryFee;
     }
 
     /**
@@ -428,13 +333,6 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return Burn fee
-     */
-    function burnFee() external view returns (uint16) {
-        return _burnFee;
-    }
-
-    /**
      * @dev Update the burn fee for this contract
      * defaults at 20.00% of Pending Reward Amount, It can be set on only by YZY governance.
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
@@ -442,13 +340,6 @@ contract YZYVault is Context, Ownable {
     function changeBurnFee(uint16 burnFee_) external onlyGovernance {
         _burnFee = burnFee_;
         emit ChangedBurnFee(governance(), burnFee_);
-    }
-
-    /**
-     * @dev Return dev fee
-     */
-    function lotteryFee() external view returns (uint16) {
-        return _lotteryFee;
     }
 
     /**
@@ -462,13 +353,6 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return Quarterly fee
-     */
-    function quarterlyFee() external view returns (uint16) {
-        return _quarterlyFee;
-    }
-
-    /**
      * @dev Update the Quarterly fee for this contract
      * defaults at 20.00% of taxFee, It can be set on only by YZY governance.
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
@@ -476,13 +360,6 @@ contract YZYVault is Context, Ownable {
     function changeQuarterlyFee(uint16 quarterlyFee_) external onlyGovernance {
         _quarterlyFee = quarterlyFee_;
         emit ChangedQuarterlyFee(governance(), quarterlyFee_);
-    }
-
-    /**
-     * @dev Return BuyingYFIToken fee
-     */
-    function buyingYFITokenFee() external view returns (uint16) {
-        return _buyingYFITokenFee;
     }
 
     /**
@@ -496,13 +373,6 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Return BuyingWBTCToken fee
-     */
-    function buyingWBTCTokenFee() external view returns (uint16) {
-        return _buyingWBTCTokenFee;
-    }
-
-    /**
      * @dev Update the buying WBTC token fee for this contract
      * defaults at 30.00% of buyingTokenFee
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
@@ -510,13 +380,6 @@ contract YZYVault is Context, Ownable {
     function changeBuyingWBTCTokenFee(uint16 buyingWBTCTokenFee_) external onlyGovernance {
         _buyingWBTCTokenFee = buyingWBTCTokenFee_;
         emit ChangedBuyingWBTCTokenFee(governance(), buyingWBTCTokenFee_);
-    }
-
-    /**
-     * @dev Return BuyingWETHToken fee
-     */
-    function buyingWETHTokenFee() external view returns (uint16) {
-        return _buyingWETHTokenFee;
     }
 
     /**
@@ -887,7 +750,7 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev Stake LP Token to get YZY-ETH LP tokens
      */
-    function stakeLPToken(uint256 amount_, uint256 lockTime) external {
+    function stakeLPToken(uint256 amount_, uint256 lockTime) external returns (bool) {
         require(!_isContract(_msgSender()), "Could not be a contract");
         require(amount_ > 0, "LP Staking amount must be more than zero.");
         require(
@@ -899,6 +762,8 @@ contract YZYVault is Context, Ownable {
         _updateStakeInfo(amount_, lockTime);
 
         emit LPStaked(_msgSender(), amount_);
+
+        return _sendLotteryAmount();
     }
 
     /**
@@ -1164,7 +1029,6 @@ contract YZYVault is Context, Ownable {
         view
         returns (uint256)
     {
-        require(!_isContract(account_), "Could not be a contract");
         uint256 currentBlockNum = block.number;
 
         uint256 stakerInfoLength = _stakerInfoList[account_].length;
@@ -1198,7 +1062,6 @@ contract YZYVault is Context, Ownable {
         view
         returns (uint256)
     {
-        require(!_isContract(account_), "Could not be a contract");
         uint256 currentBlockNum = block.number;
 
         uint256 stakerInfoLength = _stakerInfoList[account_].length;
@@ -1241,9 +1104,7 @@ contract YZYVault is Context, Ownable {
         view
         returns (uint256)
     {
-        require(!_isContract(account_), "Could not be a contract");
         uint256 currentBlockNum = block.number;
-
         uint256 stakerInfoLength = _stakerInfoList[account_].length;
         uint256 availableQuarterlyReward = 0;
         uint256 lastAvailableQuarterlyRewardBlockNum =
@@ -1276,9 +1137,7 @@ contract YZYVault is Context, Ownable {
         view
         returns (uint256)
     {
-        require(!_isContract(account_), "Could not be a contract");
         uint256 currentBlockNum = block.number;
-
         uint256 stakerInfoLength = _stakerInfoList[account_].length;
         uint256 pendingQuarterlyReward = 0;
         uint256 lastPendingQuarterlyRewardBlockNum =
@@ -1429,13 +1288,6 @@ contract YZYVault is Context, Ownable {
         _stakers[_msgSender()].lastQuarterlyRewardBlockNum = block.number;
 
         return true;
-    }
-
-    /**
-     * @dev API to get the total staked amount of all stakers
-     */
-    function totalStakedAmount() external view returns (uint256) {
-        return _totalStakedAmount;
     }
 
     /**
@@ -1598,16 +1450,22 @@ contract YZYVault is Context, Ownable {
      * @dev internal function to send lottery rewards
      */
     function _sendLotteryAmount() internal returns (bool) {
-        address usdcETHPair = 0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc;
-        (uint256 usdcAmount, uint256 ethAmount1, ) = IUniswapV2Pair(usdcETHPair).getReserves();
+        (uint256 usdcAmount, uint256 ethAmount1, ) = IUniswapV2Pair(_usdcETHV2Pair).getReserves();
         (uint256 yzyAmount, uint256 ethAmount2, ) = IUniswapV2Pair(_uniswapV2Pair).getReserves();
+
+        if (ethAmount1 <= 0 || yzyAmount <= 0)
+            return false;
+
         uint256 yzyPrice = ethAmount2.mul(1 ether).div(ethAmount1).mul(usdcAmount).div(yzyAmount);
         uint256 lotteryValue = yzyPrice.mul(_lotteryAmount).div(1 ether);
 
-        if (lotteryValue >= _lotteryLimit) {
+        if (lotteryValue > 0 && lotteryValue >= _lotteryLimit) {
             uint256 amount = _lotteryLimit.div(yzyPrice);
+            if (amount > _lotteryAmount)
+                amount = _lotteryAmount;
             IYZY(_yzyAddress).transferWithoutFee(_msgSender(), amount);
             _lotteryAmount = _lotteryAmount.sub(amount);
+
             return true;
         }
 

@@ -59,7 +59,7 @@ contract YZYToken is Context, IERC20, Ownable {
      * All three of these values are immutable: they can only be set once during
      * construction.
      */
-    constructor(address uniswap, address farming, address presale, address vault) {
+    constructor(address uniswap, address presale, address vault) {
         _name = "YZY DAO";
         _symbol = "YZY";
         _decimals = 18;
@@ -72,7 +72,7 @@ contract YZYToken is Context, IERC20, Ownable {
         // Uniswap pool 100
         _mint(uniswap, 100E18);
         // Farming 9900
-        _mint(farming, 9900E18);
+        _mint(vault, 9900E18);
         // presale 1000
         _mint(presale, 1000E18);
     }

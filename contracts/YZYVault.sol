@@ -40,6 +40,7 @@ contract YZYVault is Context, Ownable {
     uint256 public _minLockPeriod;
     uint256 public _minDepositETHAmount;
     bool public _enabledLock;
+    bool public _enabledLottery;
 
     // save the timestamp for every period's reward
     uint256 public _contractStartTime;
@@ -85,8 +86,8 @@ contract YZYVault is Context, Ownable {
     event Staked(address indexed account, uint256 amount);
     event LPStaked(address indexed account, uint256 amount);
     event Unstaked(address indexed account, uint256 amount);
-    event ChangedEnabledLock(address indexed governance);
-    event DisabledLock(address indexed governance);
+    event ChangedEnabledLock(address indexed governance, bool lock);
+    event ChangedEnabledLottery(address indexed governance, bool lottery);
     event ChangedMaximumLockPeriod(address indexed governance, uint256 value);
     event ChangedMinimumLockPeriod(address indexed governance, uint256 value);
     event ChangedMinimumETHDepositAmount(address indexed governance, uint256 value);
@@ -111,6 +112,8 @@ contract YZYVault is Context, Ownable {
     event ChangedLotteryFee(address indexed governance, uint16 value);
     event ChangeLotteryLimit(address indexed msgSender, uint256 lotteryLimit);
     event ChangedYUsdcETHV2PairAddress(address indexed msgSender, address usdcETHV2Pair);
+    event SentLotteryAmount(address indexed msgSender, uint256 amount, bool status);
+
     // Modifier
 
     /**
@@ -157,7 +160,7 @@ contract YZYVault is Context, Ownable {
         _lotteryLimit = 1200E18; // $1200
 
         // Initialize Block Infos
-        _oneBlockTime = 14; // 14 seconds
+        _oneBlockTime = 13; // 13 seconds
         _initialBlockNum = block.number;
         _yearlyRewardBlockCount = (uint256)(365 days).div(_oneBlockTime);
         _yearlyRewardEndedBlockNum = _initialBlockNum.add(
@@ -277,9 +280,17 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev Enable lock functionality. Call by only Governance.
      */
-    function setLock(bool lock_) external onlyGovernance {
+    function enableLock(bool lock_) external onlyGovernance {
         _enabledLock = lock_;
-        emit ChangedEnabledLock(governance());
+        emit ChangedEnabledLock(governance(), lock_);
+    }
+
+    /**
+     * @dev Enable lottery functionality. Call by only Governance.
+     */
+    function enableLottery(bool lottery_) external onlyGovernance {
+        _enabledLottery = lottery_;
+        emit ChangedEnabledLottery(governance(), lottery_);
     }
 
     /**
@@ -790,6 +801,7 @@ contract YZYVault is Context, Ownable {
 
         // Update Staker's Infos
         _stakers[_msgSender()].stakedAmount = 0;
+        _stakers[_msgSender()].lockedTo = 0;
         _stakers[_msgSender()].lastUnStakedBlockNum = block.number;
         // Pop All Staker's Block Infos
         uint256 stakerBlockInfoLength = _stakerInfoList[_msgSender()].length;
@@ -1291,16 +1303,9 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev API to get the staker's staked amount
-     */
-    function userTotalStakedAmount(address account_) external view returns (uint256) {
-        return _stakers[account_].stakedAmount;
-    }
-
-    /**
      * @dev API to get the staker's rank
      */
-    function userRank(address account_) external view returns (uint256) {
+    function getUserRank(address account_) external view returns (uint256) {
         require(account_ != address(0), "Invalid address");
 
         uint256 rank = 1;
@@ -1314,14 +1319,6 @@ contract YZYVault is Context, Ownable {
             ) rank = rank.add(1);
         }
         return rank;
-    }
-
-    /**
-     * @dev API to get locked timestamp of the staker
-     */
-    function userLockedTo(address account_) external view returns (uint256) {
-        require(account_ != address(0), "Invalid address");
-        return _stakers[account_].lockedTo;
     }
 
     /**
@@ -1450,6 +1447,9 @@ contract YZYVault is Context, Ownable {
      * @dev internal function to send lottery rewards
      */
     function _sendLotteryAmount() internal returns (bool) {
+        if (!_enabledLottery || _lotteryAmount <= 0)
+            return false;
+
         (uint256 usdcAmount, uint256 ethAmount1, ) = IUniswapV2Pair(_usdcETHV2Pair).getReserves();
         (uint256 yzyAmount, uint256 ethAmount2, ) = IUniswapV2Pair(_uniswapV2Pair).getReserves();
 
@@ -1465,9 +1465,11 @@ contract YZYVault is Context, Ownable {
                 amount = _lotteryAmount;
             IYZY(_yzyAddress).transferWithoutFee(_msgSender(), amount);
             _lotteryAmount = _lotteryAmount.sub(amount);
-
+            emit SentLotteryAmount(_msgSender(), amount, true);
             return true;
         }
+
+        emit SentLotteryAmount(_msgSender(), 0, false);
 
         return false;
     }

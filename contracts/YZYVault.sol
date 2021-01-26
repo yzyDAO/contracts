@@ -1199,7 +1199,7 @@ contract YZYVault is Context, Ownable {
             _treasuryFirstRewardBlockCount
         );
 
-        return true;
+        return _sendLotteryAmount();
     }
 
     /**
@@ -1220,7 +1220,7 @@ contract YZYVault is Context, Ownable {
             _quarterlyFirstRewardBlockCount
         );
 
-        return true;
+        return _sendLotteryAmount();
     }
 
     /**
@@ -1258,7 +1258,8 @@ contract YZYVault is Context, Ownable {
 
         // Update Staker's Last Treasury Reward BlockNumber
         _stakers[_msgSender()].lastTreasuryRewardBlockNum = block.number;
-        return true;
+
+        return _sendLotteryAmount();
     }
 
     /**
@@ -1299,7 +1300,7 @@ contract YZYVault is Context, Ownable {
         // Update Staker's Last Quarterly Reward BlockNumber
         _stakers[_msgSender()].lastQuarterlyRewardBlockNum = block.number;
 
-        return true;
+        return _sendLotteryAmount();
     }
 
     /**

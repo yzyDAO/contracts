@@ -3,7 +3,6 @@
 pragma solidity >=0.6.0 <0.8.0;
 
 import "./SafeMath.sol";
-import "./Context.sol";
 import "./Ownable.sol";
 import "./IYZY.sol";
 import "./IERC20.sol";
@@ -88,17 +87,12 @@ contract YZYVault is Context, Ownable {
     event Unstaked(address indexed account, uint256 amount);
     event ChangedEnabledLock(address indexed governance, bool lock);
     event ChangedEnabledLottery(address indexed governance, bool lottery);
-    event ChangedMaximumLockPeriod(address indexed governance, uint256 value);
-    event ChangedMinimumLockPeriod(address indexed governance, uint256 value);
+    event ChangedLockPeriod(address indexed governance, uint256 minValue, uint256 maxValue);
     event ChangedMinimumETHDepositAmount(address indexed governance, uint256 value);
     event ChangedTreasuryRewardPeriod(address indexed governance, uint256 value);
     event ChangeQuarterlyRewardPeriod(address indexed governance, uint256 value);
     event ChangedUniswapV2Pair(address indexed governance, address indexed uniswapV2Pair);
-    event ChangedUniswapV2Router(address indexed governance, address indexed uniswapV2Pair);
     event ChangedYzyAddress(address indexed governance, address indexed yzyAddress);
-    event ChangedYfiTokenAddress(address indexed governance, address indexed yfiAddress);
-    event ChangedWbtcTokenAddress(address indexed governance, address indexed wbtcAddress);
-    event ChangedWethTokenAddress(address indexed governance, address indexed wethAddress);
     event EmergencyWithdrawToken(address indexed from, address indexed to, uint256 amount);
     event WithdrawTreasuryReward(address indexed staker, uint256 amount);
     event WithdrawQuarterlyReward(address indexed staker, uint256 amount);
@@ -111,7 +105,6 @@ contract YZYVault is Context, Ownable {
     event SwapAndLiquifyForYZY(address indexed msgSender, uint256 totAmount, uint256 ethAmount, uint256 yzyAmount);
     event ChangedLotteryFee(address indexed governance, uint16 value);
     event ChangeLotteryLimit(address indexed msgSender, uint256 lotteryLimit);
-    event ChangedYUsdcETHV2PairAddress(address indexed msgSender, address usdcETHV2Pair);
     event SentLotteryAmount(address indexed msgSender, uint256 amount, bool status);
 
     // Modifier
@@ -137,7 +130,18 @@ contract YZYVault is Context, Ownable {
         _;
     }
 
-    constructor() {
+    constructor(
+        address uniswapV2Pair_,
+        address yfiTokenAddress_,
+        address wbtcTokenAddress_,
+        address wethTokenAddress_,
+        address usdcETHV2Pair_
+    ) {
+        _uniswapV2Pair = uniswapV2Pair_;
+        _yfiTokenAddress = yfiTokenAddress_;
+        _wbtcTokenAddress = wbtcTokenAddress_;
+        _wethTokenAddress = wethTokenAddress_;
+        _usdcETHV2Pair = usdcETHV2Pair_;
         _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
 
         _treasuryRewardPeriod = 14 days;
@@ -163,25 +167,15 @@ contract YZYVault is Context, Ownable {
         _oneBlockTime = 13; // 13 seconds
         _initialBlockNum = block.number;
         _yearlyRewardBlockCount = (uint256)(365 days).div(_oneBlockTime);
-        _yearlyRewardEndedBlockNum = _initialBlockNum.add(
-            _yearlyRewardBlockCount
-        );
+        _yearlyRewardEndedBlockNum = _initialBlockNum.add(_yearlyRewardBlockCount);
 
         // Initialize Treasury Rewards Infos
-        _treasuryFirstRewardBlockCount = _treasuryRewardPeriod.div(
-            _oneBlockTime
-        );
-        _treasuryFirstRewardEndedBlockNum = _initialBlockNum.add(
-            _treasuryFirstRewardBlockCount
-        );
+        _treasuryFirstRewardBlockCount = _treasuryRewardPeriod.div(_oneBlockTime);
+        _treasuryFirstRewardEndedBlockNum = _initialBlockNum.add(_treasuryFirstRewardBlockCount);
 
         // Initialize Quarterly Rewards Infos
-        _quarterlyFirstRewardBlockCount = _quarterlyRewardPeriod.div(
-            _oneBlockTime
-        );
-        _quarterlyFirstRewardEndedBlockNum = _initialBlockNum.add(
-            _quarterlyFirstRewardBlockCount
-        );
+        _quarterlyFirstRewardBlockCount = _quarterlyRewardPeriod.div(_oneBlockTime);
+        _quarterlyFirstRewardEndedBlockNum = _initialBlockNum.add(_quarterlyFirstRewardBlockCount);
 
         // Initialize the reward amount
         _initialFirstTreasuryReward = (uint256)(2000E18)
@@ -205,60 +199,12 @@ contract YZYVault is Context, Ownable {
             .div(_yearlyRewardBlockCount);
     }
 
-    function setupAddresses(
-        address uniswapV2Pair_,
-        address yzyAddress_,
-        address yfiTokenAddress_,
-        address wbtcTokenAddress_,
-        address wethTokenAddress_,
-        address usdtETHV2Pair_
-    ) external onlyGovernance {
-        _uniswapV2Pair = uniswapV2Pair_;
-        _yzyAddress = yzyAddress_;
-        _yfiTokenAddress = yfiTokenAddress_;
-        _wbtcTokenAddress = wbtcTokenAddress_;
-        _wethTokenAddress = wethTokenAddress_;
-        _usdcETHV2Pair = usdtETHV2Pair_;
-    }
-
     /**
      * @dev Change Minimum Deposit ETH Amount. Call by only Governance.
      */
     function changeMinimumDepositETHAmount(uint256 minDepositETHAmount_) external onlyGovernance {
         _minDepositETHAmount = minDepositETHAmount_;
         emit ChangedMinimumETHDepositAmount(governance(), minDepositETHAmount_);
-    }
-
-    /**
-     * @dev Change YFI Token contract address. Call by only Governance.
-     */
-    function changeYfiTokenAddress(address yfiAddress_) external onlyGovernance {
-        _yfiTokenAddress = yfiAddress_;
-        emit ChangedYfiTokenAddress(governance(), yfiAddress_);
-    }
-
-    /**
-     * @dev Change usdc-eth pair contract address. Call by only Governance.
-     */
-    function changeUsdcETHV2PairAddress(address address_) external onlyGovernance {
-        _usdcETHV2Pair = address_;
-        emit ChangedYUsdcETHV2PairAddress(governance(), address_);
-    }
-
-    /**
-     * @dev Change WBTC Token address. Call by only Governance.
-     */
-    function changeWbtcTokenAddress(address wbtcAddress_) external onlyGovernance {
-        _wbtcTokenAddress = wbtcAddress_;
-        emit ChangedWbtcTokenAddress(governance(), wbtcAddress_);
-    }
-
-    /**
-     * @dev Change WETH Token address. Call by only Governance.
-     */
-    function changeWethTokenAddress(address wethAddress_) external onlyGovernance {
-        _wethTokenAddress = wethAddress_;
-        emit ChangedWethTokenAddress(governance(), wethAddress_);
     }
 
     /**
@@ -296,17 +242,11 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev Change maximun lock period. Call by only Governance.
      */
-    function changedMaximumLockPeriod(uint256 maxLockPeriod_) external onlyGovernance {
-        _maxLockPeriod = maxLockPeriod_;
-        emit ChangedMaximumLockPeriod(governance(), _maxLockPeriod);
-    }
-
-    /**
-     * @dev Change minimum lock period. Call by only Governance.
-     */
-    function changedMinimumLockPeriod(uint256 minLockPeriod_) external onlyGovernance {
+    function changeLockPeriod(uint256 minLockPeriod_, uint256 maxLockPeriod_) external onlyGovernance {
         _minLockPeriod = minLockPeriod_;
-        emit ChangedMinimumLockPeriod(governance(), _minLockPeriod);
+        _maxLockPeriod = maxLockPeriod_;
+        
+        emit ChangedLockPeriod(governance(), minLockPeriod_, _maxLockPeriod);
     }
 
     /**
@@ -315,14 +255,6 @@ contract YZYVault is Context, Ownable {
     function changeUniswapV2Pair(address uniswapV2Pair_) external onlyGovernance {
         _uniswapV2Pair = uniswapV2Pair_;
         emit ChangedUniswapV2Pair(governance(), uniswapV2Pair_);
-    }
-
-    /**
-     * @dev Change address of Uniswap V2Router. Call by only Governance.
-     */
-    function changeUniswapV2Router(address uniswapV2Router_) external onlyGovernance {
-        _uniswapV2Router = IUniswapV2Router02(uniswapV2Router_);
-        emit ChangedUniswapV2Router(governance(), address(uniswapV2Router_));
     }
 
     /**

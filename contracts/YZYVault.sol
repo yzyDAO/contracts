@@ -1302,6 +1302,7 @@ contract YZYVault is Context, Ownable {
         require(rewards > 0, "No treasury reward state");
 
         uint256 treasureLotteryFee = uint256(_treasuryFee).add(uint256(_lotteryFee));
+        
         uint256 lotteryFeeAmount =rewards.mul(uint256(_lotteryFee)).div(10000).mul(treasureLotteryFee).div(10000);
         _lotteryAmount = _lotteryAmount.add(lotteryFeeAmount);
         uint256 actualRewards = rewards.sub(lotteryFeeAmount);

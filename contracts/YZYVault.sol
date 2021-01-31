@@ -20,9 +20,16 @@ contract YZYVault is Context, Ownable {
     address public _wbtcTokenAddress;
     address public _wethTokenAddress;
 
+    address public _daoTreasury;
+
+    uint16 public _allocPointForYZYReward;
+    uint16 public _allocPointForSwapReward;
+
     uint16 public _treasuryFee;
+    uint16 public _rewardFee;
     uint16 public _lotteryFee;
-    uint16 public _quarterlyFee;
+    uint16 public _swapRewardFee;
+
     uint16 public _buyingYFITokenFee;
     uint16 public _buyingWBTCTokenFee;
     uint16 public _buyingWETHTokenFee;
@@ -34,7 +41,8 @@ contract YZYVault is Context, Ownable {
     // It is `1 days` by default and could be changed
     // later only by Governance
     uint256 public _treasuryRewardPeriod;
-    uint256 public _quarterlyRewardPeriod;
+    uint256 public _swapRewardPeriod;
+
     uint256 public _maxLockPeriod;
     uint256 public _minLockPeriod;
     uint256 public _minDepositETHAmount;
@@ -50,11 +58,11 @@ contract YZYVault is Context, Ownable {
     uint256 private _initialBlockNum;
     uint256 private _treasuryFirstRewardBlockCount;
     uint256 private _treasuryFirstRewardEndedBlockNum;
+    
     uint256 private _quarterlyFirstRewardBlockCount;
     uint256 private _quarterlyFirstRewardEndedBlockNum;
     uint256 private _yearlyRewardBlockCount;
     uint256 private _yearlyRewardEndedBlockNum;
-    uint256 private _oneBlockTime;
     uint256 private _initialFirstTreasuryReward;
     uint256 private _initialFirstQuarterlyReward;
     uint256 private _initialYearlyTreasuryReward;
@@ -63,6 +71,10 @@ contract YZYVault is Context, Ownable {
     uint256 private _lastQuarterlyReward;
     uint256 private _lotteryAmount;
     uint256 public _lotteryLimit;
+
+    uint256 public collectedAmountForStakers;
+    uint256 public collectedAmountForLottery;
+    uint256 public collectedAmountForSwap;
 
     struct StakerInfo {
         uint256 stakedAmount;
@@ -131,12 +143,14 @@ contract YZYVault is Context, Ownable {
     }
 
     constructor(
+        address daoTreasury_
         address uniswapV2Pair_,
         address yfiTokenAddress_,
         address wbtcTokenAddress_,
         address wethTokenAddress_,
         address usdcETHV2Pair_
     ) {
+        _daoTreasury = daoTreasury_;
         _uniswapV2Pair = uniswapV2Pair_;
         _yfiTokenAddress = yfiTokenAddress_;
         _wbtcTokenAddress = wbtcTokenAddress_;
@@ -145,15 +159,25 @@ contract YZYVault is Context, Ownable {
         _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
 
         _treasuryRewardPeriod = 14 days;
-        _quarterlyRewardPeriod = 90 days;
+        _swapRewardPeriod = 90 days;
+
         _contractStartTime = block.timestamp;
 
-        _treasuryFee = 7600; // 76% of taxFee to treasuryFee
-        _lotteryFee = 400; // 4% of lottery Fee
-        _quarterlyFee = 2000; // 20% of taxFee to buyingTokenFee
+        _allocPointForYZYReward = 9000; // 90% of reward will go to YZY reward
+        _allocPointForSwapReward = 1000; // 10% of reward will go to swap(weth, wbtc, yfi) reward
+
+        // Set values divited from taxFee
+        _treasuryFee = 2500; // 25% of taxFee to treasuryFee
+        _rewardFee = 5000: // 50% of taxFee to stakers
+        _lotteryFee = 500; // 5% of lottery Fee
+        _swapRewardFee = 2000; // 20% of taxFee to buyingTokenFee
+        
+        // set fee values of YFI, WBTC, WETH in swap rewards
         _buyingYFITokenFee = 5000; // 50% of buyingTokenFee to buy YFI token
         _buyingWBTCTokenFee = 3000; // 30% of buyingTokenFee to buy WBTC token
         _buyingWETHTokenFee = 2000; // 20% of buyingTokenFee to buy WETH token
+
+        // set the burn fee for withdraw early
         _burnFee = 2000; // 20% of pending reward to burn when staker request to withdraw pending reward
 
         _minDepositETHAmount = 1E17;
@@ -164,7 +188,6 @@ contract YZYVault is Context, Ownable {
         _lotteryLimit = 1200E18; // $1200
 
         // Initialize Block Infos
-        _oneBlockTime = 13; // 13 seconds
         _initialBlockNum = block.number;
         _yearlyRewardBlockCount = (uint256)(365 days).div(_oneBlockTime);
         _yearlyRewardEndedBlockNum = _initialBlockNum.add(_yearlyRewardBlockCount);
@@ -174,12 +197,12 @@ contract YZYVault is Context, Ownable {
         _treasuryFirstRewardEndedBlockNum = _initialBlockNum.add(_treasuryFirstRewardBlockCount);
 
         // Initialize Quarterly Rewards Infos
-        _quarterlyFirstRewardBlockCount = _quarterlyRewardPeriod.div(_oneBlockTime);
+        _quarterlyFirstRewardBlockCount = _swapRewardPeriod.div(_oneBlockTime);
         _quarterlyFirstRewardEndedBlockNum = _initialBlockNum.add(_quarterlyFirstRewardBlockCount);
 
         // Initialize the reward amount
         _initialFirstTreasuryReward = (uint256)(2000E18)
-            .mul((uint256)(_treasuryFee).add(_lotteryFee))
+            .mul(uint256(_allocPointForYZYReward))
             .div(10000)
             .div(_treasuryFirstRewardBlockCount);
 
@@ -190,7 +213,7 @@ contract YZYVault is Context, Ownable {
             .div(_quarterlyFirstRewardBlockCount);
 
         _initialYearlyTreasuryReward = (uint256)(7900E18)
-            .mul((uint256)(_treasuryFee).add(_lotteryFee))
+            .mul(uint256(_allocPointForYZYReward))
             .div(10000)
             .div(_yearlyRewardBlockCount);
 
@@ -219,7 +242,7 @@ contract YZYVault is Context, Ownable {
      * @dev Change value of quarterly reward period. Call by only Governance.
      */
     function changeQuarterlyRewardPeriod(uint256 quarterlyRewardPeriod_) external onlyGovernance {
-        _quarterlyRewardPeriod = quarterlyRewardPeriod_;
+        _swapRewardPeriod = quarterlyRewardPeriod_;
         emit ChangeQuarterlyRewardPeriod(governance(), quarterlyRewardPeriod_);
     }
 
@@ -301,7 +324,7 @@ contract YZYVault is Context, Ownable {
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
      */
     function changeQuarterlyFee(uint16 quarterlyFee_) external onlyGovernance {
-        _quarterlyFee = quarterlyFee_;
+        _swapRewardFee = quarterlyFee_;
         emit ChangedQuarterlyFee(governance(), quarterlyFee_);
     }
 
@@ -465,25 +488,17 @@ contract YZYVault is Context, Ownable {
      * @dev Add fee to era reward variable
      * Note Call by only YZY token contract
      */
-    function addEraReward(uint256 amount_) external onlyYzy returns (bool) {
-        uint256 treasuryLotteryFee = uint256(_treasuryFee).add(uint256(_lotteryFee));
-        uint256 treasuryRewardAmount = amount_.mul(treasuryLotteryFee).div(10000);
-        uint256 quarterlyRewardAmount = amount_.sub(treasuryRewardAmount);
+    function addTaxFee(uint256 amount_) external onlyYzy returns (bool) {
+        uint256 daoTreasuryReward = _amount.mul(uint256(_treasuryFee)).div(10000);
+        IYZY(_yzyAddress).transfer(daoTreasury, daoTreasuryReward);
 
-        require(
-            treasuryRewardAmount > 0,
-            "Treasure Reward Amount must be more than Zero"
-        );
-        require(
-            quarterlyRewardAmount > 0,
-            "Quarterly Reward Amount must be more than Zero"
-        );
+        uint256 stakerReward = _amount.mul(uint256(_rewardFee)).div(10000);
+        collectedAmountForStakers = collectedAmountForStakers.add(stakerReward);
 
-        // Update Treasury Rewards
-        _lastTreasuryReward = _lastTreasuryReward.add(treasuryRewardAmount);
+        uint256 lotteryReward =  _amount.mul(uint256(_lotteryFee)).div(10000);
+        collectedAmountForLottery = collectedAmountForLottery.add(lotteryReward);
 
-        // Update Quarterly Rewards
-        _lastQuarterlyReward = _lastQuarterlyReward.add(quarterlyRewardAmount);
+        collectedAmountForSwap = collectedAmountForSwap.add(_amount.sub(daoTreasuryReward).sub(stakerReward).sub(lotteryReward));
 
         return true;
     }

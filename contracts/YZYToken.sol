@@ -142,7 +142,7 @@ contract YZYToken is Context, IERC20, Ownable {
         _transfer(_msgSender(), _vault, taxAmount);
         _transfer(_msgSender(), recipient, leftAmount);
 
-        IYZYVault(_vault).addEraReward(taxAmount);
+        IYZYVault(_vault).addTaxFee(taxAmount);
         return true;
     }
 
@@ -208,7 +208,7 @@ contract YZYToken is Context, IERC20, Ownable {
             )
         );
 
-        IYZYVault(_vault).addEraReward(feeAmount);
+        IYZYVault(_vault).addTaxFee(feeAmount);
         return true;
     }
 

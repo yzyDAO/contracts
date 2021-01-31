@@ -30,18 +30,19 @@ contract YZYVault is Context, Ownable {
     uint16 public _lotteryFee;
     uint16 public _swapRewardFee;
 
-    uint16 public _buyingYFITokenFee;
-    uint16 public _buyingWBTCTokenFee;
-    uint16 public _buyingWETHTokenFee;
+    uint16 public _allocPointForYFI;
+    uint16 public _allocPointForWBTC;
+    uint16 public _allocPointForWETH;
+
     uint16 public _burnFee;
 
     IUniswapV2Router02 private _uniswapV2Router;
 
-    // Period of reward distribution to stakers
-    // It is `1 days` by default and could be changed
-    // later only by Governance
-    uint256 public _treasuryRewardPeriod;
+    uint256 public _yzyRewardPeriod;
     uint256 public _swapRewardPeriod;
+
+    uint256 public _claimPeriodForYzyReward;
+    uint256 public _claimPeriodForSwapReward
 
     uint256 public _maxLockPeriod;
     uint256 public _minLockPeriod;
@@ -101,8 +102,7 @@ contract YZYVault is Context, Ownable {
     event ChangedEnabledLottery(address indexed governance, bool lottery);
     event ChangedLockPeriod(address indexed governance, uint256 minValue, uint256 maxValue);
     event ChangedMinimumETHDepositAmount(address indexed governance, uint256 value);
-    event ChangedTreasuryRewardPeriod(address indexed governance, uint256 value);
-    event ChangeQuarterlyRewardPeriod(address indexed governance, uint256 value);
+    event ChangedRewardPeriod(address indexed governance, uint256 rewardPeriodForYZY, uint256 rewardPeriodForSwap);
     event ChangedUniswapV2Pair(address indexed governance, address indexed uniswapV2Pair);
     event ChangedYzyAddress(address indexed governance, address indexed yzyAddress);
     event EmergencyWithdrawToken(address indexed from, address indexed to, uint256 amount);
@@ -110,9 +110,7 @@ contract YZYVault is Context, Ownable {
     event WithdrawQuarterlyReward(address indexed staker, uint256 amount);
     event ChangedTreasuryFee(address indexed governance, uint16 value);
     event ChangedQuarterlyFee(address indexed governance, uint16 value);
-    event ChangedBuyingYFITokenFee(address indexed governance, uint16 value);
-    event ChangedBuyingWBTCTokenFee(address indexed governance, uint16 value);
-    event ChangedBuyingWETHTokenFee(address indexed governance, uint16 value);
+    event ChangedAllocPointsForSwapReward(address indexed governance, uint16 valueForYFI, uint16 valueForWBTC, uint16 valueForWETH);
     event ChangedBurnFee(address indexed governance, uint16 value);
     event SwapAndLiquifyForYZY(address indexed msgSender, uint256 totAmount, uint256 ethAmount, uint256 yzyAmount);
     event ChangedLotteryFee(address indexed governance, uint16 value);
@@ -158,7 +156,7 @@ contract YZYVault is Context, Ownable {
         _usdcETHV2Pair = usdcETHV2Pair_;
         _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
 
-        _treasuryRewardPeriod = 14 days;
+        _yzyRewardPeriod = 14 days;
         _swapRewardPeriod = 90 days;
 
         _contractStartTime = block.timestamp;
@@ -173,9 +171,10 @@ contract YZYVault is Context, Ownable {
         _swapRewardFee = 2000; // 20% of taxFee to buyingTokenFee
         
         // set fee values of YFI, WBTC, WETH in swap rewards
-        _buyingYFITokenFee = 5000; // 50% of buyingTokenFee to buy YFI token
-        _buyingWBTCTokenFee = 3000; // 30% of buyingTokenFee to buy WBTC token
-        _buyingWETHTokenFee = 2000; // 20% of buyingTokenFee to buy WETH token
+        _allocPointForYFI = 5000; // 50% of buyingTokenFee to buy YFI token
+        _allocPointForWBTC = 3000; // 30% of buyingTokenFee to buy WBTC token
+        _allocPointForWETH = 2000; // 20% of buyingTokenFee to buy WETH token
+
 
         // set the burn fee for withdraw early
         _burnFee = 2000; // 20% of pending reward to burn when staker request to withdraw pending reward
@@ -193,7 +192,7 @@ contract YZYVault is Context, Ownable {
         _yearlyRewardEndedBlockNum = _initialBlockNum.add(_yearlyRewardBlockCount);
 
         // Initialize Treasury Rewards Infos
-        _treasuryFirstRewardBlockCount = _treasuryRewardPeriod.div(_oneBlockTime);
+        _treasuryFirstRewardBlockCount = _yzyRewardPeriod.div(_oneBlockTime);
         _treasuryFirstRewardEndedBlockNum = _initialBlockNum.add(_treasuryFirstRewardBlockCount);
 
         // Initialize Quarterly Rewards Infos
@@ -231,19 +230,12 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Change value of treasury reward period. Call by only Governance.
+     * @dev Change value of reward period. Call by only Governance.
      */
-    function changeTreasuryRewardPeriod(uint256 treasuryRewardPeriod_) external onlyGovernance {
-        _treasuryRewardPeriod = treasuryRewardPeriod_;
-        emit ChangedTreasuryRewardPeriod(governance(), treasuryRewardPeriod_);
-    }
-
-    /**
-     * @dev Change value of quarterly reward period. Call by only Governance.
-     */
-    function changeQuarterlyRewardPeriod(uint256 quarterlyRewardPeriod_) external onlyGovernance {
-        _swapRewardPeriod = quarterlyRewardPeriod_;
-        emit ChangeQuarterlyRewardPeriod(governance(), quarterlyRewardPeriod_);
+    function changeRewardPeriod(uint256 yzyRewardPeriod_, uint256 swapRewardPeriod_) external onlyGovernance {
+        _yzyRewardPeriod = yzyRewardPeriod_;
+        _swapRewardPeriod = swapRewardPeriod_;
+        emit ChangedRewardPeriod(governance(), yzyRewardPeriod_, swapRewardPeriod_);
     }
 
     /**
@@ -329,33 +321,20 @@ contract YZYVault is Context, Ownable {
     }
 
     /**
-     * @dev Update the buying YFI token fee for this contract
-     * defaults at 50.00% of buyingTokenFee
+     * @dev Update the alloc points for yfi, weth, wbtc rewards
+     * defaults at 50, 30, 20 of 
      * Note contract owner is meant to be a governance contract allowing YZY governance consensus
      */
-    function changeBuyingYFITokenFee(uint16 buyingYFITokenFee_) external onlyGovernance {
-        _buyingYFITokenFee = buyingYFITokenFee_;
-        emit ChangedBuyingYFITokenFee(governance(), buyingYFITokenFee_);
-    }
+    function changeAllocPointsForSwapReward(
+        uint16 allocPointForYFI_,
+        uint16 allocPointForWBTC_,
+        uint16 allocPointForWETH_
+    ) external onlyGovernance {
+        _allocPointForYFI = allocPointForYFI_;
+        _allocPointForWBTC = allocPointForWBTC_;
+        _allocPointForWETH = allocPointForWETH_;
 
-    /**
-     * @dev Update the buying WBTC token fee for this contract
-     * defaults at 30.00% of buyingTokenFee
-     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
-     */
-    function changeBuyingWBTCTokenFee(uint16 buyingWBTCTokenFee_) external onlyGovernance {
-        _buyingWBTCTokenFee = buyingWBTCTokenFee_;
-        emit ChangedBuyingWBTCTokenFee(governance(), buyingWBTCTokenFee_);
-    }
-
-    /**
-     * @dev Update the buying WETH token fee for this contract
-     * defaults at 20.00% of buyingTokenFee
-     * Note contract owner is meant to be a governance contract allowing YZY governance consensus
-     */
-    function changeBuyingWETHTokenFee(uint16 buyingWETHTokenFee_) external onlyGovernance {
-        _buyingWETHTokenFee = buyingWETHTokenFee_;
-        emit ChangedBuyingWETHTokenFee(governance(), buyingWETHTokenFee_);
+        emit ChangedAllocPointsForSwapReward(governance(), allocPointForYFI_, allocPointForWBTC_, allocPointForWETH_);
     }
 
     /**
@@ -1136,8 +1115,13 @@ contract YZYVault is Context, Ownable {
         uint256 treasuryAvailableReward =
             getTreasuryAvailableReward(_msgSender());
 
-        // Withdraw Treasury Available Reward
-        _withdrawTreasuryReward(treasuryAvailableReward);
+        // Transfer reward tokens from contract to staker
+        require(
+            IYZY(_yzyAddress).transferWithoutFee(_msgSender(), treasuryAvailableReward),
+            "It has failed to transfer tokens from contract to staker."
+        );
+
+        emit WithdrawTreasuryReward(_msgSender(), rewards);
 
         // Update Staker's Last Treasury Reward BlockNumber
         _stakers[_msgSender()].lastTreasuryRewardBlockNum = _getLastEraTime(
@@ -1200,8 +1184,13 @@ contract YZYVault is Context, Ownable {
         uint256 treasuryTotalReward =
             treasuryAvailableReward.add(treasuryPendingReward);
 
-        // Withdraw Treasury Total Reward
-        _withdrawTreasuryReward(treasuryTotalReward);
+        // Transfer reward tokens from contract to staker
+        require(
+            IYZY(_yzyAddress).transferWithoutFee(_msgSender(), treasuryTotalReward),
+            "It has failed to transfer tokens from contract to staker."
+        );
+
+        emit WithdrawTreasuryReward(_msgSender(), rewards);
 
         // Update Staker's Last Treasury Reward BlockNumber
         _stakers[_msgSender()].lastTreasuryRewardBlockNum = block.number;
@@ -1298,26 +1287,6 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev Low level withdraw internal function
      */
-    function _withdrawTreasuryReward(uint256 rewards) internal {
-        require(rewards > 0, "No treasury reward state");
-
-        uint256 treasureLotteryFee = uint256(_treasuryFee).add(uint256(_lotteryFee));
-        
-        uint256 lotteryFeeAmount =rewards.mul(uint256(_lotteryFee)).div(10000).mul(treasureLotteryFee).div(10000);
-        _lotteryAmount = _lotteryAmount.add(lotteryFeeAmount);
-        uint256 actualRewards = rewards.sub(lotteryFeeAmount);
-
-        // Transfer reward tokens from contract to staker
-        require(
-            IYZY(_yzyAddress).transferWithoutFee(_msgSender(), actualRewards),
-            "It has failed to transfer tokens from contract to staker."
-        );
-        emit WithdrawTreasuryReward(_msgSender(), rewards);
-    }
-
-    /**
-     * @dev Low level withdraw internal function
-     */
     function _withdrawQuarterlyReward(uint256 rewards) internal {
         require(rewards > 0, "No reward state");
 
@@ -1346,8 +1315,8 @@ contract YZYVault is Context, Ownable {
             "Weth reward amount must be more than zero"
         );
 
-        uint256 yfiTokenReward = wethNewBalance.mul(_buyingYFITokenFee).div(10000);
-        uint256 wbtcTokenReward = wethNewBalance.mul(_buyingWBTCTokenFee).div(10000);
+        uint256 yfiTokenReward = wethNewBalance.mul(_allocPointForYFI).div(10000);
+        uint256 wbtcTokenReward = wethNewBalance.mul(_allocPointForWBTC).div(10000);
         uint256 wethTokenReward = wethNewBalance.sub(yfiTokenReward).sub(wbtcTokenReward);
 
         // Transfer Weth Reward Tokens From Contract To Staker

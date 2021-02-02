@@ -26,7 +26,7 @@ interface IERC20 {
 
 interface IYZYVault {
     function balanceOf(address account) external view returns (uint256);
-    function addTaxFee(uint256 amount_) external;
+    function addTaxFee(uint256 amount) external returns (bool);
 }
 
 abstract contract Ownable is Context {

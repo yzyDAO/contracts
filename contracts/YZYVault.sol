@@ -329,9 +329,11 @@ contract YZYVault is Context, Ownable {
     uint256 private _lotteryAmount;
     uint256 public _lotteryLimit;
 
-    uint256 public collectedAmountForStakers;
-    uint256 public collectedAmountForLottery;
-    uint256 public collectedAmountForSwap;
+    uint256 public _collectedAmountForStakers;
+    uint256 public _collectedAmountForSwap;
+    uint256 public _collectedAmountForLottery;
+
+    uint256 public _lotteryPaidOut;
 
     struct StakerInfo {
         uint256 stakedAmount;
@@ -348,29 +350,30 @@ contract YZYVault is Context, Ownable {
         uint256 amount;
         uint256 timestamp;
     }
-    WinnerInfo[] public winnerInfo;
+    WinnerInfo[] private winnerInfo;
     
-    event ChangedEnabledLock(address indexed governance, bool lock);
-    event ChangedEnabledLottery(address indexed governance, bool lottery);
-    event ChangedLockPeriod(address indexed governance, uint256 minValue, uint256 maxValue);
-    event ChangedMinimumETHDepositAmount(address indexed governance, uint256 value);
-    event ChangedRewardPeriod(address indexed governance, uint256 firstRewardPeriod, uint256 secondRewardPeriod);
-    event ChangedClaimPeriod(address indexed governance, uint256 claimPeriodForYzyReward, uint256 claimPeriodForSwapReward);
-    event ChangedYzyInfo(address indexed governance, address indexed yzy, address indexed yzyETHPair);
-    event ChangedFeeInfo(address indexed governance, uint16 treasuryFee, uint16 rewardFee, uint16 lotteryFee, uint16 swapRewardFee, uint16 burnFee);
-    event ChangedAllocPointsForSwapReward(address indexed governance, uint16 valueForYFI, uint16 valueForWBTC, uint16 valueForWETH);
-    event ChangedBurnFee(address indexed governance, uint16 value);
-    event ChangedLotteryInfo(address indexed governance, uint16 lotteryFee, uint256 lotteryLimit);
+    event ChangedEnabledLock(address indexed owner, bool lock);
+    event ChangedEnabledLottery(address indexed owner, bool lottery);
+    event ChangedLockPeriod(address indexed owner, uint256 minValue, uint256 maxValue);
+    event ChangedMinimumETHDepositAmount(address indexed owner, uint256 value);
+    event ChangedRewardPeriod(address indexed owner, uint256 firstRewardPeriod, uint256 secondRewardPeriod);
+    event ChangedClaimPeriod(address indexed owner, uint256 claimPeriodForYzyReward, uint256 claimPeriodForSwapReward);
+    event ChangedYzyAddress(address indexed owner, address indexed yzy);
+    event ChangedYzyETHPair(address indexed owner, address indexed yzyETHPair);
+    event ChangedFeeInfo(address indexed owner, uint16 treasuryFee, uint16 rewardFee, uint16 lotteryFee, uint16 swapRewardFee, uint16 burnFee);
+    event ChangedAllocPointsForSwapReward(address indexed owner, uint16 valueForYFI, uint16 valueForWBTC, uint16 valueForWETH);
+    event ChangedBurnFee(address indexed owner, uint16 value);
+    event ChangedLotteryInfo(address indexed owner, uint16 lotteryFee, uint256 lotteryLimit);
 
-    event ClaimedYzyAvailableReward(address indexed governance, uint256 amount);
-    event ClaimedSwapAvailableReward(address indexed governance, uint256 amount);
-    event ClaimedYzyReward(address indexed governance, uint256 available, uint256 pending);
-    event ClaimedSwapReward(address indexed governance, uint256 amount);
+    event ClaimedYzyAvailableReward(address indexed owner, uint256 amount);
+    event ClaimedSwapAvailableReward(address indexed owner, uint256 amount);
+    event ClaimedYzyReward(address indexed owner, uint256 available, uint256 pending);
+    event ClaimedSwapReward(address indexed owner, uint256 amount);
 
     event Staked(address indexed account, uint256 amount);
     event Unstaked(address indexed account, uint256 amount);
 
-    event SentLotteryAmount(address indexed governance, uint256 amount, bool status);
+    event SentLotteryAmount(address indexed owner, uint256 amount, bool status);
     event EmergencyWithdrawToken(address indexed from, address indexed to, uint256 amount);
     event SwapAndLiquifyForYZY(address indexed msgSender, uint256 totAmount, uint256 ethAmount, uint256 yzyAmount);
 
@@ -388,7 +391,7 @@ contract YZYVault is Context, Ownable {
         require(
             !_enabledLock ||
             (_stakers[_msgSender()].lockedTo > 0 &&
-                block.number >= _stakers[_msgSender()].lockedTo),
+                block.timestamp >= _stakers[_msgSender()].lockedTo),
             "vault: Pool is locked"
         );
         _;
@@ -439,13 +442,13 @@ contract YZYVault is Context, Ownable {
         _maxLpSupply = 3787e18;
         
         _minDepositETHAmount = 1e17; // 0.1 ether, could be changed by governance
-        _maxLockPeriod = 2372500; // around 1 year, could be changed by governance
-        _minLockPeriod = 585000; // around 90 days, could be changed by governance
+        _maxLockPeriod = 365 days; // could be changed by governance
+        _minLockPeriod = 90 days; // could be changed by governance
 
         _enabledLock = true; // could be changed by governance
         _enabledLottery = true; // could be changed by governance
 
-        _lotteryLimit = 1200E18; // $1200, could be changed by governance
+        _lotteryLimit = 1200e6; // $1200(1200 usd, decimals 6), could be changed by governance
         _startBlock = block.number;
     }
 
@@ -506,14 +509,16 @@ contract YZYVault is Context, Ownable {
         emit ChangedLockPeriod(_msgSender(), minLockPeriod, _maxLockPeriod);
     }
 
-    /**
-     * @dev Change YZY-ETH Uniswap V2 Pair address. Call by only Governance.
-     */
-    function changeYzyInfo(address yzy, address yzyETHPair) external onlyOwner {
+    function changeYzyAddress(address yzy) external onlyOwner {
         _yzy = TokenInterface(yzy);
+
+        emit ChangedYzyAddress(_msgSender(), yzy);
+    }
+
+    function changeYzyETHPair(address yzyETHPair) external onlyOwner {
         _yzyETHV2Pair = IUniswapV2Pair(yzyETHPair);
 
-        emit ChangedYzyInfo(_msgSender(), yzy, yzyETHPair);
+        emit ChangedYzyETHPair(_msgSender(), yzyETHPair);
     }
 
     /**
@@ -571,12 +576,12 @@ contract YZYVault is Context, Ownable {
         _yzy.transfer(_daoTreasury, daoTreasuryReward);
 
         uint256 stakerReward = amount.mul(uint256(_rewardFee)).div(10000);
-        collectedAmountForStakers = collectedAmountForStakers.add(stakerReward);
+        _collectedAmountForStakers = _collectedAmountForStakers.add(stakerReward);
 
         uint256 lotteryReward =  amount.mul(uint256(_lotteryFee)).div(10000);
-        collectedAmountForLottery = collectedAmountForLottery.add(lotteryReward);
+        _collectedAmountForLottery = _collectedAmountForLottery.add(lotteryReward);
 
-        collectedAmountForSwap = collectedAmountForSwap.add(amount.sub(daoTreasuryReward).sub(stakerReward).sub(lotteryReward));
+        _collectedAmountForSwap = _collectedAmountForSwap.add(amount.sub(daoTreasuryReward).sub(stakerReward).sub(lotteryReward));
 
         return true;
     }
@@ -592,33 +597,49 @@ contract YZYVault is Context, Ownable {
     // Get YZY reward per block
     function getYzyPerBlockForYzyReward() public view returns (uint256) {
         uint256 multiplier = getMultiplier(_startBlock, block.number);
-        uint256 totalLpSupply = _yzyETHV2Pair.totalSupply();
-        uint256 yzySharePerLp = _maxLpSupply.mul(1 ether).div(totalLpSupply);
-
-        if (multiplier == 0 || totalLpSupply == 0) {
+        
+        if (multiplier == 0 || getTotalStakedAmount() == 0) {
             return 0;
         } else if (multiplier <= _firstRewardPeriod) {
-            return _firstRewardAmount.mul(uint256(_allocPointForYZYReward)).mul(yzySharePerLp).div(1 ether).div(_firstRewardPeriod).div(10000);
+            return _firstRewardAmount
+                    .mul(uint256(_allocPointForYZYReward))
+                    .mul(1 ether)
+                    .div(getTotalStakedAmount())
+                    .div(_firstRewardPeriod)
+                    .div(10000);
         } else if (multiplier > _firstRewardPeriod && multiplier <= _secondRewardPeriod) {
-            return _secondRewardAmount.mul(uint256(_allocPointForYZYReward)).mul(yzySharePerLp).div(1 ether).div(_secondRewardPeriod).div(10000);
+            return _secondRewardAmount
+                    .mul(uint256(_allocPointForYZYReward))
+                    .mul(1 ether)
+                    .div(getTotalStakedAmount())
+                    .div(_secondRewardPeriod)
+                    .div(10000);
         } else {
-            return collectedAmountForStakers.mul(yzySharePerLp).div(1 ether).div(multiplier);
+            return _collectedAmountForStakers.mul(1 ether).div(getTotalStakedAmount()).div(multiplier);
         }
     }
 
     function getYzyPerBlockForSwapReward() public view returns (uint256) {
         uint256 multiplier = getMultiplier(_startBlock, block.number);
-        uint256 totalLpSupply = _yzyETHV2Pair.totalSupply();
-        uint256 yzySharePerLp = _maxLpSupply.mul(1 ether).div(totalLpSupply);
 
-        if (multiplier == 0 || totalLpSupply == 0) {
+        if (multiplier == 0 || getTotalStakedAmount() == 0) {
             return 0;
         } else if (multiplier <= _firstRewardPeriod) {
-            return _firstRewardAmount.mul(_allocPointForSwapReward).mul(yzySharePerLp).div(1 ether).div(_firstRewardPeriod).div(10000);
+            return _firstRewardAmount
+                    .mul(uint256(_allocPointForSwapReward))
+                    .mul(1 ether)
+                    .div(getTotalStakedAmount())
+                    .div(_firstRewardPeriod)
+                    .div(10000);
         } else if (multiplier > _firstRewardPeriod && multiplier <= _secondRewardPeriod) {
-            return _secondRewardAmount.mul(_allocPointForSwapReward).mul(yzySharePerLp).div(1 ether).div(_secondRewardPeriod).div(10000);
+            return _secondRewardAmount
+                    .mul(uint256(_allocPointForSwapReward))
+                    .mul(1 ether)
+                    .div(getTotalStakedAmount())
+                    .div(_secondRewardPeriod)
+                    .div(10000);
         } else {
-            return collectedAmountForSwap.mul(yzySharePerLp).div(1 ether).div(multiplier);
+            return _collectedAmountForSwap.mul(1 ether).div(getTotalStakedAmount()).div(multiplier);
         }
     }
 
@@ -739,10 +760,13 @@ contract YZYVault is Context, Ownable {
         if (staker.stakedAmount > 0) {
             claimYzyReward();
             claimSwapReward();
+        } else {
+            staker.lastClimedBlockForYzyReward = block.number;
+            staker.lastClimedBlockForSwapReward = block.number;
         }
 
         staker.stakedAmount = staker.stakedAmount.add(newBalance);
-        staker.lockedTo = lockPeriod.add(block.number);
+        staker.lockedTo = lockPeriod.add(block.timestamp);
 
         emit Staked(_msgSender(), newBalance);
 
@@ -763,10 +787,13 @@ contract YZYVault is Context, Ownable {
         if (staker.stakedAmount > 0) {
             claimYzyReward();
             claimSwapReward();
+        } else {
+            staker.lastClimedBlockForYzyReward = block.number;
+            staker.lastClimedBlockForSwapReward = block.number;
         }
 
         staker.stakedAmount = staker.stakedAmount.add(amount);
-        staker.lockedTo = lockPeriod.add(block.number);
+        staker.lockedTo = lockPeriod.add(block.timestamp);
 
         emit Staked(_msgSender(), amount);
 
@@ -792,6 +819,8 @@ contract YZYVault is Context, Ownable {
 
         claimSwapReward();
 
+        _yzyETHV2Pair.transfer(_msgSender(), amount);
+
         staker.stakedAmount = staker.stakedAmount.sub(amount);
 
         emit Unstaked(_msgSender(), amount);
@@ -810,8 +839,8 @@ contract YZYVault is Context, Ownable {
         uint256 yzyPerblock = getYzyPerBlockForYzyReward();
         uint256 pendingBlockNum = multiplier.mod(_claimPeriodForYzyReward);
 
-        pending = yzyPerblock.mul(pendingBlockNum);
-        available = yzyPerblock.mul(multiplier.sub(pendingBlockNum));
+        pending = yzyPerblock.mul(pendingBlockNum).mul(staker.stakedAmount).div(1 ether);
+        available = yzyPerblock.mul(multiplier.sub(pendingBlockNum)).mul(staker.stakedAmount).div(1 ether);
     }
 
     function getSwapReward(address account) public view returns (uint256 available, uint256 pending) {
@@ -822,11 +851,11 @@ contract YZYVault is Context, Ownable {
             return (0, 0);
         }
 
-        uint256 yzyPerblock = getYzyPerBlockForYzyReward();
+        uint256 yzyPerblock = getYzyPerBlockForSwapReward();
         uint256 pendingBlockNum = multiplier.mod(_claimPeriodForSwapReward);
 
-        pending = yzyPerblock.mul(pendingBlockNum);
-        available = yzyPerblock.mul(multiplier.sub(pendingBlockNum));
+        pending = yzyPerblock.mul(pendingBlockNum).mul(staker.stakedAmount).div(1 ether);
+        available = yzyPerblock.mul(multiplier.sub(pendingBlockNum)).mul(staker.stakedAmount).div(1 ether);
     }
 
     function claimYzyAvailableReward() public returns (bool) {
@@ -1005,22 +1034,43 @@ contract YZYVault is Context, Ownable {
     function _sendLotteryAmount() internal returns (bool) {
         if (!_enabledLottery || _lotteryAmount <= 0)
             return false;
+        
+        uint256 usdcReserve = 0;
+        uint256 ethReserve1 = 0;
+        uint256 yzyReserve = 0;
+        uint256 ethReserve2 = 0;
+        address token0 = _usdcETHV2Pair.token0();
 
-        (uint256 usdcAmount, uint256 ethAmount1, ) = _usdcETHV2Pair.getReserves();
-        (uint256 yzyAmount, uint256 ethAmount2, ) = _yzyETHV2Pair.getReserves();
+        if (token0 == address(_weth)){
+            (ethReserve1, usdcReserve, ) = _usdcETHV2Pair.getReserves();
+        } else {
+            (usdcReserve, ethReserve1, ) = _usdcETHV2Pair.getReserves();
+        }
 
-        if (ethAmount1 <= 0 || yzyAmount <= 0)
+        token0 = _yzyETHV2Pair.token0();
+
+        if (token0 == address(_weth)){
+            (ethReserve2, yzyReserve, ) = _yzyETHV2Pair.getReserves();
+        } else {
+            (yzyReserve, ethReserve2, ) = _yzyETHV2Pair.getReserves();
+        }
+
+        if (ethReserve1 <= 0 || yzyReserve <= 0)
             return false;
 
-        uint256 yzyPrice = ethAmount2.mul(1 ether).div(ethAmount1).mul(usdcAmount).div(yzyAmount);
+        uint256 yzyPrice = usdcReserve.mul(1 ether).div(ethReserve1).mul(ethReserve2).div(yzyReserve);
         uint256 lotteryValue = yzyPrice.mul(_lotteryAmount).div(1 ether);
 
         if (lotteryValue > 0 && lotteryValue >= _lotteryLimit) {
-            uint256 amount = _lotteryLimit.div(yzyPrice);
+            uint256 amount = _lotteryLimit.mul(1 ether).div(yzyPrice);
+
             if (amount > _lotteryAmount)
                 amount = _lotteryAmount;
+
             _yzy.transfer(_msgSender(), amount);
             _lotteryAmount = _lotteryAmount.sub(amount);
+            _lotteryPaidOut = _lotteryPaidOut.add(amount);
+
             emit SentLotteryAmount(_msgSender(), amount, true);
 
             winnerInfo.push(

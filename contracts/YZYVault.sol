@@ -300,6 +300,7 @@ contract YZYVault is Context, Ownable {
     uint16 public _lotteryFee;
     uint16 public _swapRewardFee;
     uint16 public _burnFee;
+    uint16 public _earlyUnstakeFee;
 
     uint16 public _allocPointForYFI;
     uint16 public _allocPointForWBTC;
@@ -314,15 +315,12 @@ contract YZYVault is Context, Ownable {
     uint256 public _claimPeriodForYzyReward;
     uint256 public _claimPeriodForSwapReward;
 
-    uint256 public _maxLockPeriod;
-    uint256 public _minLockPeriod;
+    uint256 public _lockPeriod;
 
     uint256 public _minDepositETHAmount;
 
     bool public _enabledLock;
     bool public _enabledLottery;
-
-    uint256 public _maxLpSupply;
 
     uint256 public _startBlock;
 
@@ -354,7 +352,7 @@ contract YZYVault is Context, Ownable {
     
     event ChangedEnabledLock(address indexed owner, bool lock);
     event ChangedEnabledLottery(address indexed owner, bool lottery);
-    event ChangedLockPeriod(address indexed owner, uint256 minValue, uint256 maxValue);
+    event ChangedLockPeriod(address indexed owner, uint256 period);
     event ChangedMinimumETHDepositAmount(address indexed owner, uint256 value);
     event ChangedRewardPeriod(address indexed owner, uint256 firstRewardPeriod, uint256 secondRewardPeriod);
     event ChangedClaimPeriod(address indexed owner, uint256 claimPeriodForYzyReward, uint256 claimPeriodForSwapReward);
@@ -363,6 +361,7 @@ contract YZYVault is Context, Ownable {
     event ChangedFeeInfo(address indexed owner, uint16 treasuryFee, uint16 rewardFee, uint16 lotteryFee, uint16 swapRewardFee, uint16 burnFee);
     event ChangedAllocPointsForSwapReward(address indexed owner, uint16 valueForYFI, uint16 valueForWBTC, uint16 valueForWETH);
     event ChangedBurnFee(address indexed owner, uint16 value);
+    event ChangedEarlyUnstakeFee(address indexed owner, uint16 value);
     event ChangedLotteryInfo(address indexed owner, uint16 lotteryFee, uint256 lotteryLimit);
 
     event ClaimedYzyAvailableReward(address indexed owner, uint256 amount);
@@ -383,16 +382,6 @@ contract YZYVault is Context, Ownable {
         require(
             address(_yzy) == _msgSender(),
             "Ownable: caller is not the YZY token contract"
-        );
-        _;
-    }
-
-    modifier onlyUnlocked() {
-        require(
-            !_enabledLock ||
-            (_stakers[_msgSender()].lockedTo > 0 &&
-                block.timestamp >= _stakers[_msgSender()].lockedTo),
-            "vault: Pool is locked"
         );
         _;
     }
@@ -422,28 +411,27 @@ contract YZYVault is Context, Ownable {
         _claimPeriodForYzyReward = 91000; // around 14 days, could be changed by governance
         _claimPeriodForSwapReward = 585000; // around 90 days, could be changed by governance
 
-        _allocPointForYZYReward = 9000; // 90% of reward will go to YZY reward, could be changed by governance
-        _allocPointForSwapReward = 1000; // 10% of reward will go to swap(weth, wbtc, yfi) reward, could be changed by governance
+        _allocPointForYZYReward = 8000; // 80% of reward will go to YZY reward, could be changed by governance
+        _allocPointForSwapReward = 2000; // 20% of reward will go to swap(weth, wbtc, yfi) reward, could be changed by governance
 
         // Set values divited from taxFee
         _treasuryFee = 2500; // 25% of taxFee to treasuryFee, could be changed by governance
         _rewardFee = 5000; // 50% of taxFee to stakers, could be changed by governance
         _lotteryFee = 500; // 5% of lottery Fee, could be changed by governance
-        _swapRewardFee = 2000; // 20% of taxFee to buyingTokenFee, could be changed by governance
+        _swapRewardFee = 2000; // 20% of taxFee to swap tokens, could be changed by governance
+
+        _earlyUnstakeFee = 1000; // 10% of early unstake fee, could be changed by governance
         
         // set alloc points of YFI, WBTC, WETH in swap rewards, could be changed by governance
-        _allocPointForYFI = 5000; // 50% of buyingTokenFee to buy YFI token, could be changed by governance
-        _allocPointForWBTC = 3000; // 30% of buyingTokenFee to buy WBTC token, could be changed by governance
-        _allocPointForWETH = 2000; // 20% of buyingTokenFee to buy WETH token, could be changed by governance
+        _allocPointForYFI = 3000; // 30% of fee to buy YFI token, could be changed by governance
+        _allocPointForWBTC = 5000; // 50% of fee to buy WBTC token, could be changed by governance
+        _allocPointForWETH = 2000; // 20% of fee to buy WETH token, could be changed by governance
 
         // set the burn fee for withdraw early
         _burnFee = 2000; // 20% of pending reward to burn when staker request to withdraw pending reward, could be changed by governance
         
-        _maxLpSupply = 3787e18;
-        
         _minDepositETHAmount = 1e17; // 0.1 ether, could be changed by governance
-        _maxLockPeriod = 365 days; // could be changed by governance
-        _minLockPeriod = 90 days; // could be changed by governance
+        _lockPeriod = 90 days; // could be changed by governance
 
         _enabledLock = true; // could be changed by governance
         _enabledLottery = true; // could be changed by governance
@@ -502,11 +490,10 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev Change maximun lock period. Call by only Governance.
      */
-    function changeLockPeriod(uint256 minLockPeriod, uint256 maxLockPeriod) external onlyOwner {
-        _minLockPeriod = minLockPeriod;
-        _maxLockPeriod = maxLockPeriod;
+    function changeLockPeriod(uint256 period) external onlyOwner {
+        _lockPeriod = period;
         
-        emit ChangedLockPeriod(_msgSender(), minLockPeriod, _maxLockPeriod);
+        emit ChangedLockPeriod(_msgSender(), _lockPeriod);
     }
 
     function changeYzyAddress(address yzy) external onlyOwner {
@@ -540,6 +527,12 @@ contract YZYVault is Context, Ownable {
         _burnFee = burnFee;
 
         emit ChangedFeeInfo(_msgSender(), treasuryFee, rewardFee, lotteryFee, swapRewardFee, burnFee);
+    }
+
+    function changeEarlyUnstakeFee(uint16 fee) external onlyOwner {
+        _earlyUnstakeFee = fee;
+
+        emit ChangedEarlyUnstakeFee(_msgSender(), fee);
     }
 
     /**
@@ -742,10 +735,9 @@ contract YZYVault is Context, Ownable {
 
     receive() external payable {}
 
-    function stake(uint256 lockPeriod) external payable returns (bool) {
+    function stake() external payable returns (bool) {
         require(!isContract(_msgSender()), "Vault: Could not be contract.");
         require(msg.value >= _minDepositETHAmount, "Vault: insufficient staking amount.");
-        require(lockPeriod <= _maxLockPeriod && lockPeriod >= _minLockPeriod, "Vault: Invalid lock time");
 
         // Check Initial Balance
         uint256 initialBalance = _yzyETHV2Pair.balanceOf(address(this));
@@ -766,7 +758,7 @@ contract YZYVault is Context, Ownable {
         }
 
         staker.stakedAmount = staker.stakedAmount.add(newBalance);
-        staker.lockedTo = lockPeriod.add(block.timestamp);
+        staker.lockedTo = _lockPeriod.add(block.timestamp);
 
         emit Staked(_msgSender(), newBalance);
 
@@ -776,9 +768,8 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev Stake LP Token to get YZY-ETH LP tokens
      */
-    function stakeLPToken(uint256 amount, uint256 lockPeriod) external returns (bool) {
+    function stakeLPToken(uint256 amount) external returns (bool) {
         require(!isContract(_msgSender()), "Vault: Could not be contract.");
-        require(lockPeriod <= _maxLockPeriod && lockPeriod >= _minLockPeriod, "Vault: Invalid lock time");
 
         _yzyETHV2Pair.transferFrom(_msgSender(), address(this), amount);
 
@@ -793,7 +784,7 @@ contract YZYVault is Context, Ownable {
         }
 
         staker.stakedAmount = staker.stakedAmount.add(amount);
-        staker.lockedTo = lockPeriod.add(block.timestamp);
+        staker.lockedTo = _lockPeriod.add(block.timestamp);
 
         emit Staked(_msgSender(), amount);
 
@@ -803,7 +794,7 @@ contract YZYVault is Context, Ownable {
     /**
      * @dev Unstake staked YZY-ETH LP tokens
      */
-    function unstake(uint256 amount) external onlyUnlocked returns (bool) {
+    function unstake(uint256 amount) external returns (bool) {
         require(!isContract(_msgSender()), "Vault: Could not be contract.");
 
         StakerInfo storage staker = _stakers[_msgSender()];
@@ -819,7 +810,16 @@ contract YZYVault is Context, Ownable {
 
         claimSwapReward();
 
-        _yzyETHV2Pair.transfer(_msgSender(), amount);
+        if (_enabledLock &&
+            _stakers[_msgSender()].lockedTo > 0 &&
+            block.timestamp < _stakers[_msgSender()].lockedTo
+        ) {
+            uint256 feeAmount = amount.mul(uint256(_earlyUnstakeFee)).div(10000);
+            _yzyETHV2Pair.transfer(_daoTreasury, feeAmount); 
+            _yzyETHV2Pair.transfer(_msgSender(), amount.sub(feeAmount));
+        } else {
+           _yzyETHV2Pair.transfer(_msgSender(), amount);
+        }
 
         staker.stakedAmount = staker.stakedAmount.sub(amount);
 

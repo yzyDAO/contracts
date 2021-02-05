@@ -137,8 +137,9 @@ contract YZYToken is Context, IERC20, Ownable {
 
     uint16 public _taxFee;
     address public _vault;
-    address private _uniswap;
-    address private _presale;
+    address private _vaultTokenOwner;
+    address private _uniswapTokenOwner;
+    address private _presaleTokenOwner;
     address private _uniswapV2Router;
 
     uint8 private _initialMaxTransfers;
@@ -147,37 +148,37 @@ contract YZYToken is Context, IERC20, Ownable {
     modifier onlyVault() {
         require(
             _vault == _msgSender(),
-            "Ownable: caller is not vault or owner contract"
+            "Ownable: caller is not vault"
         );
         _;
     }
 
     event ChangedTaxFee(address indexed owner, uint16 fee);
-    event ChangedVault(address indexed oldAddress, address indexed newAddress);
+    event ChangedVault(address indexed owner, address indexed oldAddress, address indexed newAddress);
     event ChangedInitialMaxTransfers(address indexed owner, uint8 count);
 
-    constructor(address uniswap, address presale, address vault) {
+    constructor(address uniswapTokenOwner, address presaleTokenOwner, address vaultTokenOwner) {
         _name = "YZY DAO";
         _symbol = "YZY";
         _decimals = 18;
 
-        _vault = vault;
-        _uniswap = uniswap;
-        _presale = presale;
+        _uniswapTokenOwner = uniswapTokenOwner;
+        _presaleTokenOwner = presaleTokenOwner;
+        _vaultTokenOwner = vaultTokenOwner;
         _uniswapV2Router = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
 
         // set initial tax fee(transfer) fee as 2%
         // It is allow 2 digits under point
         _taxFee = 200;
         _initialMaxTransfers = 50;
-        _initialMaxTransferAmount = 16e17; // initial around  0.2 eth
+        _initialMaxTransferAmount = 17e17; // initial around  0.2 eth(1.7 YZY)
 
         // Uniswap pool 100
-        _mint(uniswap, 100E18);
+        _mint(_uniswapTokenOwner, 100E18);
         // Farming 9900
-        _mint(vault, 9900E18);
+        _mint(_vaultTokenOwner, 9900E18);
         // presale 1000
-        _mint(presale, 1000E18);
+        _mint(_presaleTokenOwner, 1000E18);
     }
 
     function name() public view returns (string memory) {
@@ -259,7 +260,7 @@ contract YZYToken is Context, IERC20, Ownable {
         require(vault != address(0), "Invalid vault contract address");
         address oldAddress = _vault;
         _vault = vault;
-        emit ChangedVault(oldAddress, _vault);
+        emit ChangedVault(_msgSender(), oldAddress, _vault);
     }
 
     function setInitialMaxTransfers(uint8 count) external onlyOwner {
@@ -285,7 +286,7 @@ contract YZYToken is Context, IERC20, Ownable {
         require(recipient != address(0), "ERC20: transfer to the zero address");
 
         if (recipient != _vault) { // for anti-bot
-            if (sender != _vault && sender != _uniswap && sender != _presale) {
+            if (sender != _vault && sender != _uniswapTokenOwner && sender != _presaleTokenOwner && sender != _vaultTokenOwner) {
                 if (_initialMaxTransfers != 0) {
                     require(amount <= _initialMaxTransferAmount, "Can't transfer more than 1.7 YZY for initial 50 times.");
                     _initialMaxTransfers--;
@@ -315,7 +316,8 @@ contract YZYToken is Context, IERC20, Ownable {
     }
 
     function _checkWithoutFee() internal view returns (bool) {
-        if (_msgSender() == _vault || _msgSender() == _presale || _msgSender() == _uniswap) {
+        if (_msgSender() == _vault || _msgSender() == _presaleTokenOwner ||
+            _msgSender() == _uniswapTokenOwner || _msgSender() == _vaultTokenOwner) {
             return true;
         } else {
             return false;
